@@ -1,0 +1,29 @@
+.ib-block{
+    background: #fff;
+    border-radius: 12px;
+    border: 1px solid #E5E7EB;
+    margin-bottom: 20px;
+    overflow: hidden;
+    box-shadow: 0 2px 6px rgba(0,0,0,.05);
+}
+
+.ib-block-header{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    padding: 14px 18px;
+    background: #F9FAFB;
+    border-bottom: 1px solid #ECECEC; 
+}
+
+.ib-block-title{
+    display:flex;
+    align-items:center;
+    gap: 10px;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.ib-block-body{
+    padding: 18px;
+}

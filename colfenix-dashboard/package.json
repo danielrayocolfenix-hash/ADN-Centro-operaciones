@@ -1,0 +1,41 @@
+{
+  "name": "colfenix-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@tiptap/extension-bubble-menu": "^3.27.4",
+    "@tiptap/extension-placeholder": "^3.27.4",
+    "@tiptap/extension-text-style": "^3.27.4",
+    "@tiptap/extension-underline": "^3.27.4",
+    "@tiptap/react": "^3.27.4",
+    "@tiptap/starter-kit": "^3.27.4",
+    "date-fns": "^3.6.0",
+    "lucide-react": "^0.383.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.30.4",
+    "react-scripts": "5.0.1",
+    "react-tooltip": "^6.0.8",
+    "recharts": "^2.12.0"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version"
+    ]
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.5.4",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "postcss": "^8.5.19",
+    "tailwindcss": "^3.4.3"
+  }
+}
