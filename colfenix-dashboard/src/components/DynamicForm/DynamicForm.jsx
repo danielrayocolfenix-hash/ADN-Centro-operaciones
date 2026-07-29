@@ -287,7 +287,14 @@ export default function DynamicForm({ endpoint, initialData, onSubmit, onCancel,
             onChange={(e) =>
               handleChange(
                   campo.nombre,
-                  e.target.value === "" ? "" : Number(e.target.value)
+                  // Los selects con endpoint traen ids numéricos reales
+                  // (ruta, área, etc.) -- pero uno con opciones fijas en el
+                  // propio schema (ej. estado_dd: 'PENDIENTE_DD'/'ENCOLADO'/...)
+                  // usa valores de texto. Antes esto siempre forzaba
+                  // Number(), que convertía 'PENDIENTE_DD' en NaN: el select
+                  // nunca coincidía con ninguna opción y se veía como si no
+                  // dejara seleccionar nada.
+                  e.target.value === "" ? "" : (campo.endpoint ? Number(e.target.value) : e.target.value)
               )
           }
           >

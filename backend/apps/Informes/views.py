@@ -22,6 +22,7 @@ from apps.Informes.models import (
 )
 from apps.Informes.form_schema import FORM_INFORMES
 from apps.novedades.models import Novedades
+from apps.configuracion.permisos import tiene_permiso
 
 
 def listar_tipoInforme (request):
@@ -57,7 +58,7 @@ class AdminTiposInformeSLA(View):
     def get(self, request):
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
             return _sin_permiso()
         tipos = TipoInforme.objects.select_related('categoria_informe').all()
         data = [
@@ -80,7 +81,7 @@ class AdminTiposInformeSLA(View):
         asignarle el tiempo máximo)."""
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
             return _sin_permiso()
         try:
             data = json.loads(request.body)
@@ -104,7 +105,7 @@ class AdminTipoInformeSLADetalle(View):
     def post(self, request, tipo_informe_id):
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
             return _sin_permiso()
         try:
             data = json.loads(request.body)
@@ -138,7 +139,7 @@ class AdminCategoriasTipoInforme(View):
     def get(self, request):
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
             return _sin_permiso()
         categorias = CategoriaTipoInforme.objects.all()
         data = [
@@ -150,7 +151,7 @@ class AdminCategoriasTipoInforme(View):
     def post(self, request):
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
             return _sin_permiso()
         try:
             data = json.loads(request.body)
@@ -165,6 +166,204 @@ class AdminCategoriasTipoInforme(View):
             return JsonResponse({"success": False, "mensaje": f"Falta el campo {e}."}, status=400)
         except Exception as e:
             return JsonResponse({"success": False, "mensaje": str(e)}, status=400)
+
+
+def _contar_adjuntos_informe(informe):
+    """Cuenta todas las imágenes adjuntas de un informe (Logiox, mapa del
+    recorrido, capturas de la solicitud, evidencia de cada evento, y las de
+    negativa) -- asume que `informe` ya viene con select_related/
+    prefetch_related de logiox/recorrido/solicitud_imagenes/videos__eventos
+    __evidencias/detalles, para no disparar queries extra por cada uno."""
+    total = 0
+    logiox = getattr(informe, "logiox", None)
+    if logiox and logiox.imagen:
+        total += 1
+    total += len(informe.solicitud_imagenes.all())
+    recorrido = getattr(informe, "recorrido", None)
+    if recorrido and recorrido.imagen:
+        total += 1
+    for segmento in informe.videos.all():
+        for evento in segmento.eventos.all():
+            total += len(evento.evidencias.all())
+    for detalle in informe.detalles.all():
+        if detalle.imagen:
+            total += 1
+    return total
+
+
+def _serializar_informe_lista(informe):
+    return {
+        "id": informe.id,
+        "codigo": informe.codigo,
+        "titulo": informe.titulo,
+        "estado": informe.estado,
+        "resultado": informe.resultado,
+        "version": informe.version,
+        "fecha_creacion": informe.fecha_creacion,
+        "tipo_informe": informe.tipo_informe.nombre if informe.tipo_informe_id else None,
+        "novedad_id": informe.novedad_id,
+        "novedad_codigo": informe.novedad.codigo_novedad,
+        "cliente": informe.novedad.cliente.nombre,
+        "vehiculo": informe.novedad.vehiculo.placa,
+        "numero_interno": informe.novedad.vehiculo.numero_interno,
+        "analista": str(informe.novedad.analista),
+        "cantidad_adjuntos": _contar_adjuntos_informe(informe),
+    }
+
+
+def _queryset_informes_completo():
+    return Informe.objects.select_related(
+        "novedad", "novedad__cliente", "novedad__vehiculo", "novedad__analista", "tipo_informe",
+        "logiox", "recorrido",
+    ).prefetch_related(
+        "solicitud_imagenes", "videos__eventos__tipo", "videos__eventos__evidencias", "detalles",
+    )
+
+
+def listar_informes(request):
+    """
+    GET /api/informes/ -- listado real (nada de datos de prueba) para la
+    pantalla de Informes legales. Requiere `vista.informes`, el mismo
+    permiso que ya gatea la ruta /informes en el frontend.
+    """
+    if not request.user.is_authenticated:
+        return _no_autenticado()
+    if not tiene_permiso(request.user, "vista.informes"):
+        return _sin_permiso()
+    informes = _queryset_informes_completo().order_by("-fecha_creacion")
+    return JsonResponse([_serializar_informe_lista(inf) for inf in informes], safe=False)
+
+
+class InformeDetalleCompleto(View):
+    """
+    GET /api/informes/<informe_id>/ -- documento completo de un informe ya
+    generado, con TODOS sus archivos adjuntos (Logiox, mapa del recorrido,
+    capturas de la solicitud, evidencia de cada evento/segmento, imágenes de
+    negativa) para poder mostrarlos/abrirlos desde la card del informe.
+    """
+
+    def get(self, request, informe_id):
+        if not request.user.is_authenticated:
+            return _no_autenticado()
+        if not tiene_permiso(request.user, "vista.informes"):
+            return _sin_permiso()
+        try:
+            informe = _queryset_informes_completo().get(id=informe_id)
+        except Informe.DoesNotExist:
+            return JsonResponse({"success": False, "mensaje": "El informe no existe."}, status=404)
+
+        logiox = getattr(informe, "logiox", None)
+        recorrido = getattr(informe, "recorrido", None)
+
+        segmentos = []
+        for segmento in informe.videos.all():
+            eventos = [
+                {
+                    "id": evento.id,
+                    "tipo": evento.tipo.nombre if evento.tipo_id else None,
+                    "descripcion": evento.descripcion,
+                    "evidencias": [
+                        {"id": ev.id, "imagen": ev.imagen.url, "descripcion": ev.descripcion}
+                        for ev in evento.evidencias.all()
+                    ],
+                }
+                for evento in segmento.eventos.all()
+            ]
+            segmentos.append({
+                "id": segmento.id,
+                "orden": segmento.orden,
+                "hora_inicio": segmento.hora_inicio,
+                "hora_fin": segmento.hora_fin,
+                "observacion": segmento.observacion,
+                "eventos": eventos,
+            })
+
+        return JsonResponse({
+            "id": informe.id,
+            "codigo": informe.codigo,
+            "titulo": informe.titulo,
+            "estado": informe.estado,
+            "resultado": informe.resultado,
+            "version": informe.version,
+            "solicitud": informe.solicitud,
+            "anexos": informe.anexos,
+            "fecha_creacion": informe.fecha_creacion,
+            "tipo_informe": informe.tipo_informe.nombre if informe.tipo_informe_id else None,
+            "novedad": {
+                "id": informe.novedad.id,
+                "codigo_novedad": informe.novedad.codigo_novedad,
+                "cliente": informe.novedad.cliente.nombre,
+                "vehiculo": informe.novedad.vehiculo.placa,
+                "numero_interno": informe.novedad.vehiculo.numero_interno,
+                "conductor": informe.novedad.conductor,
+                "analista": str(informe.novedad.analista),
+            },
+            "logiox": {
+                "modo": logiox.modo,
+                "tabla": logiox.tabla,
+                "imagen": logiox.imagen.url if logiox.imagen else None,
+            } if logiox else None,
+            "solicitud_imagenes": [
+                {"id": si.id, "imagen": si.imagen.url, "orden": si.orden}
+                for si in informe.solicitud_imagenes.all()
+            ],
+            "recorrido": {
+                "texto_confirmacion": recorrido.texto_confirmacion,
+                "intro_texto": recorrido.intro_texto,
+                "imagen": recorrido.imagen.url if recorrido.imagen else None,
+            } if recorrido else None,
+            "segmentos": segmentos,
+            "detalles": [
+                {
+                    "id": d.id, "titulo": d.titulo, "orden": d.orden,
+                    "observacion": d.observacion,
+                    "imagen": d.imagen.url if d.imagen else None,
+                }
+                for d in informe.detalles.all()
+            ],
+            "mantenimientos_tabla": informe.mantenimientos_tabla,
+            "mantenimientos_nota": informe.mantenimientos_nota,
+        })
+
+
+class AdminInformeDetalle(View):
+    """
+    Detalle liviano de un Informe ya generado — usado por el "enlace" a cada
+    informe en la vista de Métricas de analistas (is_staff=True). Distinto
+    de InformeDetalleCompleto (que trae todos los adjuntos, para la pantalla
+    de Informes legales): acá solo lo suficiente para identificar el informe
+    sin tener que navegar a otra pantalla.
+    """
+
+    def get(self, request, informe_id):
+        if not request.user.is_authenticated:
+            return _no_autenticado()
+        if not tiene_permiso(request.user, "vista.administracion_metricas"):
+            return _sin_permiso()
+        try:
+            informe = Informe.objects.select_related(
+                "novedad", "novedad__cliente", "novedad__vehiculo", "novedad__analista", "tipo_informe",
+            ).get(id=informe_id)
+        except Informe.DoesNotExist:
+            return JsonResponse({"success": False, "mensaje": "El informe no existe."}, status=404)
+
+        return JsonResponse({
+            "id": informe.id,
+            "codigo": informe.codigo,
+            "titulo": informe.titulo,
+            "estado": informe.estado,
+            "resultado": informe.resultado,
+            "version": informe.version,
+            "fecha_creacion": informe.fecha_creacion,
+            "tipo_informe": informe.tipo_informe.nombre if informe.tipo_informe_id else None,
+            "novedad": {
+                "id": informe.novedad.id,
+                "codigo_novedad": informe.novedad.codigo_novedad,
+                "cliente": informe.novedad.cliente.nombre,
+                "vehiculo": informe.novedad.vehiculo.placa,
+                "analista": str(informe.novedad.analista),
+            },
+        })
 
 
 def _decode_base64_imagen(data_url, nombre_base):
@@ -202,6 +401,8 @@ class GenerarInformeView(View):
     def post(self, request, novedad_id):
         if not request.user.is_authenticated:
             return _no_autenticado()
+        if not tiene_permiso(request.user, "novedades.generar_informe"):
+            return _sin_permiso()
 
         try:
             novedad = Novedades.objects.select_related("tipo_informe").get(id=novedad_id)

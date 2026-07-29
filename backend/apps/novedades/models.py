@@ -278,9 +278,11 @@ class Novedades(models.Model):
             if self.fecha_fin_revision < self.fecha_inicio_revision:
                 errores['fecha_fin_revision'] = 'No puede ser anterior al inicio de revisión.'
 
-        if self.fecha_solicitud and self.fecha_novedad:
-            if self.fecha_solicitud < self.fecha_novedad:
-                errores['fecha_solicitud'] = 'No puede ser anterior a la fecha de la novedad.'
+        # NOTA: se quitó a propósito la validación que exigía
+        # fecha_solicitud >= fecha_novedad. La solicitud a Colfenix no
+        # siempre llega después de ocurrida la novedad -- a veces se
+        # solicita antes de que el evento termine de reportarse, así que no
+        # hay un orden fijo real entre ambas fechas.
 
         if self.motivo_negativo_id and self.respuesta_novedad != 'Negativa':
             errores['motivo_negativo'] = 'Solo aplica cuando la respuesta de la novedad es Negativa.'

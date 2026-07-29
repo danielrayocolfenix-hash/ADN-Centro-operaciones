@@ -26,8 +26,39 @@ class UsuariosColfenix(AbstractUser):
         choices=ROL_CHOICES,
     )
 
+    # Permisos específicos (vistas/acciones del dashboard) asignados desde
+    # Administración › Usuarios. Se ignora por completo si is_staff=True: un
+    # usuario staff siempre tiene acceso total, sin importar qué tenga (o no)
+    # asignado acá — ver apps.configuracion.permisos.tiene_permiso().
+    permisos = models.ManyToManyField(
+        "configuracion.Permiso",
+        blank=True,
+        related_name="usuarios",
+    )
+
     class Meta:
        db_table= 'usuarios_colfenix'
 
     def __str__(self):
         return self.get_full_name() or self.username
+
+
+class RolUsuario(models.Model):
+    """
+    Catálogo de roles ya usados -- alimenta el campo híbrido de rol en
+    Administración › Usuarios (select con sugerencias + puede escribirse uno
+    nuevo). `UsuariosColfenix.rol` sigue siendo texto libre a propósito (no
+    se convirtió en FK): así no hay que tocar los filtros existentes
+    `rol__icontains=...` en toda la app. Este catálogo solo alimenta el
+    autocompletado -- al crear/editar un usuario con un rol que no está acá
+    todavía, se agrega solo (get_or_create), sin paso extra.
+    """
+
+    nombre = models.CharField(max_length=100, unique=True)
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["nombre"]
+
+    def __str__(self):
+        return self.nombre

@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import { API_BASE } from "../../config/api";
 import { getCsrfToken } from "../../utils/csrf";
+import { useAuth } from "../../context/AuthContext";
+import { tienePermiso } from "../../utils/permisos";
 import RichTextEditor from "./RichTextEditor";
 
 const RESULTADOS = [
@@ -1062,6 +1064,8 @@ function PaperFooter({ anexosCantidad, onAnexosCantidadChange, anexosSufijo }) {
 }
 
 export default function InformeBuilderPage({ novedad, onVolver, onGuardar }) {
+  const { user } = useAuth();
+  const puedeGuardar = tienePermiso(user, "novedades.generar_informe");
   const [resultado, setResultado] = useState("positiva");
   const [tituloInforme, setTituloInforme] = useState("INFORME NOVEDAD – GERENCIA JURIDICA");
   const [fecha, setFecha] = useState(new Date().toISOString().slice(0, 10));
@@ -1196,7 +1200,19 @@ export default function InformeBuilderPage({ novedad, onVolver, onGuardar }) {
         credentials: "include",
         body: JSON.stringify(payload),
       });
-      const resultadoGuardado = await res.json();
+      let resultadoGuardado;
+      try {
+        resultadoGuardado = await res.json();
+      } catch {
+        // El servidor respondió con algo que no es JSON (ej. una página de
+        // error si el informe trae demasiadas imágenes adjuntas) — se
+        // muestra un mensaje entendible en vez del error crudo de parseo.
+        throw new Error(
+          res.status === 413 || res.status === 400
+            ? "El informe no se pudo guardar: las imágenes adjuntas son demasiado pesadas. Reduce el tamaño o la cantidad de imágenes e intenta de nuevo."
+            : `No se pudo guardar el informe (error ${res.status}).`,
+        );
+      }
       if (!resultadoGuardado.success) {
         throw new Error(resultadoGuardado.mensaje || "No se pudo guardar el informe.");
       }
@@ -1265,13 +1281,15 @@ export default function InformeBuilderPage({ novedad, onVolver, onGuardar }) {
           >
             <Printer size={16} /> Imprimir
           </button>
-          <button
-            onClick={handleGuardar}
-            disabled={guardando}
-            className="inline-flex items-center gap-2 rounded-3xl bg-accent px-4 py-3 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <Save size={16} /> {guardando ? "Guardando…" : "Guardar informe"}
-          </button>
+          {puedeGuardar && (
+            <button
+              onClick={handleGuardar}
+              disabled={guardando}
+              className="inline-flex items-center gap-2 rounded-3xl bg-accent px-4 py-3 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Save size={16} /> {guardando ? "Guardando…" : "Guardar informe"}
+            </button>
+          )}
         </div>
       </header>
 

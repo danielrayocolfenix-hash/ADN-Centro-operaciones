@@ -4,6 +4,8 @@ import { clientes as initialClientes } from "../data/mockData";
 import { generarCodigoCliente, formatFecha } from "../utils/helpers";
 import Toast from "../components/ui/Toast";
 import DrawerPanel from "../components/ui/DrawerPanel";
+import { useAuth } from "../context/AuthContext";
+import { tienePermiso } from "../utils/permisos";
 
 function ModalCliente({ cliente, onClose, onSave }) {
   const isEdit = !!cliente?.id;
@@ -146,6 +148,10 @@ function ModalDetalle({ cliente, onClose }) {
 }
 
 export default function ClientesPage() {
+  const { user } = useAuth();
+  const puedeCrear = tienePermiso(user, "clientes.crear");
+  const puedeEditar = tienePermiso(user, "clientes.editar");
+  const puedeEliminar = tienePermiso(user, "clientes.eliminar");
   const [clientes, setClientes] = useState(initialClientes);
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState(null); // null | "nuevo" | "editar" | "detalle"
@@ -187,9 +193,11 @@ export default function ClientesPage() {
           <div className="section-title">Clientes</div>
           <div className="section-sub">{clientes.length} empresas registradas · {clientes.filter(c => c.estado === "Activo").length} activas</div>
         </div>
-        <button className="btn btn-primary" onClick={() => { setSelected(null); setModal("nuevo"); }}>
-          <Plus size={15} /> Nuevo cliente
-        </button>
+        {puedeCrear && (
+          <button className="btn btn-primary" onClick={() => { setSelected(null); setModal("nuevo"); }}>
+            <Plus size={15} /> Nuevo cliente
+          </button>
+        )}
       </div>
 
       <div className="card">
@@ -247,8 +255,12 @@ export default function ClientesPage() {
                 <td>
                   <div style={{ display: "flex", gap: 4 }}>
                     <button className="btn-icon" title="Ver detalle" onClick={() => { setSelected(c); setModal("detalle"); }}><Eye size={14} /></button>
-                    <button className="btn-icon" title="Editar" onClick={() => { setSelected(c); setModal("editar"); }}><Edit2 size={14} /></button>
-                    <button className="btn-icon" title="Eliminar" style={{ color: "var(--accent-danger)" }} onClick={() => handleDelete(c.id)}><Trash2 size={14} /></button>
+                    {puedeEditar && (
+                      <button className="btn-icon" title="Editar" onClick={() => { setSelected(c); setModal("editar"); }}><Edit2 size={14} /></button>
+                    )}
+                    {puedeEliminar && (
+                      <button className="btn-icon" title="Eliminar" style={{ color: "var(--accent-danger)" }} onClick={() => handleDelete(c.id)}><Trash2 size={14} /></button>
+                    )}
                   </div>
                 </td>
               </tr>

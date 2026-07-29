@@ -7,11 +7,12 @@ from django.utils import timezone
 from django.db.models import Count
 from django.db.models import Count, Q
 from apps.novedades.models import Novedades, MotivoNegativo, MotivoPositivo, NovedadEvento, NovedadEvidencia, HorarioLaboral
-from apps.novedades.horario_laboral import calcular_sla_novedad, calcular_espera_dd
+from apps.novedades.horario_laboral import calcular_sla_novedad, calcular_espera_dd, horas_habiles_entre
 from apps.Vehiculo.models import Ruta
-from apps.Informes.models import CategoriaTipoInforme
+from apps.Informes.models import CategoriaTipoInforme, Informe
 from apps.novedades.forms_schema import NOVEDADES_FORM
 from apps.usuarios_colfenix.models import UsuariosColfenix
+from apps.configuracion.permisos import tiene_permiso
 
 
 def _no_autenticado():
@@ -166,6 +167,10 @@ def _serializar_novedad(novedad, detalle=False, horario=None):
 
 
 def novedades_view(request):
+    if not request.user.is_authenticated:
+        return _no_autenticado()
+    if not tiene_permiso(request.user, "vista.novedades"):
+        return _sin_permiso()
     horario = HorarioLaboral.get_actual()
     data = [_serializar_novedad(n, horario=horario) for n in _novedades_queryset()]
     return JsonResponse(data, safe=False)
@@ -242,6 +247,8 @@ class CrearNovedad(View):
     def post(self, request):
         if not request.user.is_authenticated:
             return _no_autenticado()
+        if not tiene_permiso(request.user, "novedades.crear"):
+            return _sin_permiso()
         try:
             data = json.loads(request.body)
 
@@ -315,6 +322,10 @@ class NovedadDetalleView(View):
     CAMPOS_TRAZABLES = {"estado_dd", "respuesta_novedad"}
 
     def get(self, request, novedad_id):
+        if not request.user.is_authenticated:
+            return _no_autenticado()
+        if not tiene_permiso(request.user, "vista.novedades"):
+            return _sin_permiso()
         try:
             novedad = _novedades_queryset().get(id=novedad_id)
         except Novedades.DoesNotExist:
@@ -324,6 +335,8 @@ class NovedadDetalleView(View):
     def post(self, request, novedad_id):
         if not request.user.is_authenticated:
             return _no_autenticado()
+        if not tiene_permiso(request.user, "novedades.editar"):
+            return _sin_permiso()
         try:
             data = json.loads(request.body)
             novedad = Novedades.objects.get(id=novedad_id)
@@ -338,6 +351,18 @@ class NovedadDetalleView(View):
 
             if "estado_dd" in data:
                 data.update(_completar_timestamps_hasta(novedad, data["estado_dd"], timezone.now(), data))
+
+            # "Generar informe" en la tabla de Novedades (y el conteo de
+            # "informes pendientes" del dashboard) dependen de
+            # estado_novedad -- pero nada lo movía nunca de su default
+            # ('Pendiente_por_responder'): la pantalla de revisión (Stepper +
+            # Resultado de la revisión) solo mandaba estado_dd/
+            # respuesta_novedad, nunca este campo, así que quedaba
+            # congelado para siempre aunque la revisión ya estuviera
+            # terminada. Se deriva acá, salvo que el payload lo traiga
+            # explícito (para no pisar un futuro flujo que sí lo maneje a mano).
+            if "respuesta_novedad" in data and "estado_novedad" not in data:
+                data["estado_novedad"] = "Completado" if data["respuesta_novedad"] else "Pendiente_por_responder"
 
             for clave, atributo in self.CAMPOS_FK.items():
                 if clave in data and data[clave] not in (None, ""):
@@ -386,7 +411,7 @@ class AsignarAnalista(View):
     def post(self, request, novedad_id):
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "novedades.asignar_analista"):
             return _sin_permiso()
         try:
             data = json.loads(request.body)
@@ -421,13 +446,18 @@ def metricas_analistas(request):
     """
     Por cada analista (rol contiene "analista", activo): cuántas novedades
     tiene asignadas hoy (novedad.analista actual, no histórico), cuántas ya
-    respondió (estado_novedad distinto de Pendiente_por_responder) y el
-    desglose Positiva/Negativa. Reservado a is_staff=True.
+    respondió (estado_novedad distinto de Pendiente_por_responder), el
+    desglose Positiva/Negativa, el tiempo de respuesta (horas hábiles desde
+    ENCOLADO hasta TERMINADO — mismo cálculo que el SLA, promediado sobre
+    sus novedades ya cerradas) y los informes que ha generado, con enlace a
+    cada uno. Reservado a is_staff=True.
     """
     if not request.user.is_authenticated:
         return _no_autenticado()
-    if not request.user.is_staff:
+    if not tiene_permiso(request.user, "vista.administracion_metricas"):
         return _sin_permiso()
+
+    horario = HorarioLaboral.get_actual()
 
     analistas = UsuariosColfenix.objects.filter(rol__icontains="analista", is_active=True).annotate(
         total=Count("novedades"),
@@ -436,8 +466,35 @@ def metricas_analistas(request):
         negativas=Count("novedades", filter=Q(novedades__respuesta_novedad="Negativa")),
     )
 
-    data = [
-        {
+    data = []
+    todos_los_tiempos = []
+
+    for a in analistas:
+        cerradas = Novedades.objects.filter(
+            analista=a, fecha_recepcion_dd__isnull=False, fecha_fin_revision__isnull=False,
+        )
+        tiempos = [
+            horas_habiles_entre(n.fecha_recepcion_dd, n.fecha_fin_revision, horario)
+            for n in cerradas
+        ]
+        todos_los_tiempos.extend(tiempos)
+
+        informes_qs = Informe.objects.filter(novedad__analista=a).select_related(
+            "novedad", "tipo_informe"
+        )
+        informes = [
+            {
+                "id": inf.id,
+                "codigo": inf.codigo,
+                "resultado": inf.resultado,
+                "fecha_creacion": inf.fecha_creacion,
+                "novedad_codigo": inf.novedad.codigo_novedad,
+                "tipo_informe": inf.tipo_informe.nombre if inf.tipo_informe_id else None,
+            }
+            for inf in informes_qs
+        ]
+
+        data.append({
             "analista_id": a.id,
             "analista": str(a),
             "rol": a.rol,
@@ -446,14 +503,24 @@ def metricas_analistas(request):
             "pendientes": a.total - a.respondidas,
             "positivas": a.positivas,
             "negativas": a.negativas,
-        }
-        for a in analistas
-    ]
+            "tiempo_respuesta_promedio_horas": round(sum(tiempos) / len(tiempos), 2) if tiempos else None,
+            "tiempo_respuesta_minimo_horas": round(min(tiempos), 2) if tiempos else None,
+            "tiempo_respuesta_maximo_horas": round(max(tiempos), 2) if tiempos else None,
+            "informes_generados": len(informes),
+            "informes": informes,
+        })
+
+    # El "cuadro de tareas" prioriza visualmente a quien más informes ha producido.
+    data.sort(key=lambda d: d["informes_generados"], reverse=True)
 
     return JsonResponse({
         "analistas": data,
         "total_general": Novedades.objects.count(),
         "total_asignadas": sum(d["total"] for d in data),
+        "total_informes": sum(d["informes_generados"] for d in data),
+        "tiempo_respuesta_equipo_horas": (
+            round(sum(todos_los_tiempos) / len(todos_los_tiempos), 2) if todos_los_tiempos else None
+        ),
     })
 
 
@@ -461,6 +528,8 @@ class EliminarNovedad(View):
     def delete(self, request, novedad_id):
         if not request.user.is_authenticated:
             return _no_autenticado()
+        if not tiene_permiso(request.user, "novedades.eliminar"):
+            return _sin_permiso()
         try:
             novedad = Novedades.objects.get(id=novedad_id)
             novedad.delete()
@@ -478,6 +547,10 @@ class EliminarNovedad(View):
 
 
 def listar_eventos_novedad(request, novedad_id):
+    if not request.user.is_authenticated:
+        return _no_autenticado()
+    if not tiene_permiso(request.user, "vista.novedades"):
+        return _sin_permiso()
     eventos = NovedadEvento.objects.filter(novedad_id=novedad_id).select_related('usuario')
 
     data = [
@@ -499,6 +572,8 @@ class EvidenciaNovedad(View):
     def post(self, request, novedad_id):
         if not request.user.is_authenticated:
             return _no_autenticado()
+        if not tiene_permiso(request.user, "novedades.subir_evidencia"):
+            return _sin_permiso()
         try:
             novedad = Novedades.objects.get(id=novedad_id)
         except Novedades.DoesNotExist:
@@ -525,6 +600,28 @@ class EvidenciaNovedad(View):
         })
 
 
+class EliminarEvidenciaNovedad(View):
+    """
+    DELETE /api/novedades/evidencia/<evidencia_id>/eliminar/ -- quita una
+    imagen de evidencia ya subida (la "X" en el thumbnail). Mismo permiso
+    que subirla (novedades.subir_evidencia): quien puede adjuntar evidencia
+    también puede corregir un archivo subido por error.
+    """
+
+    def delete(self, request, evidencia_id):
+        if not request.user.is_authenticated:
+            return _no_autenticado()
+        if not tiene_permiso(request.user, "novedades.subir_evidencia"):
+            return _sin_permiso()
+        try:
+            evidencia = NovedadEvidencia.objects.get(id=evidencia_id)
+        except NovedadEvidencia.DoesNotExist:
+            return JsonResponse({"success": False, "mensaje": "La evidencia no existe."}, status=404)
+        evidencia.archivo.delete(save=False)
+        evidencia.delete()
+        return JsonResponse({"success": True})
+
+
 def listar_motivos_negativa(request):
     motivos = MotivoNegativo.objects.filter(activo=True)
 
@@ -536,6 +633,33 @@ def listar_motivos_negativa(request):
     return JsonResponse(data, safe=False)
 
 
+class CrearMotivoNegativoRapido(View):
+    """
+    POST /api/motivos-negativa/crear/ -- agregar un motivo de negativa nuevo
+    directo desde "Resultado de la revisión" en el flujo de DVR. A
+    diferencia de AdminMotivosNegativa (catálogo completo, con activar/
+    desactivar/editar, reservado a administracion.gestionar_novedades), acá
+    cualquier usuario autenticado puede agregar una opción nueva si el
+    catálogo no cubre su caso -- no depende del rol.
+    """
+
+    def post(self, request):
+        if not request.user.is_authenticated:
+            return _no_autenticado()
+        try:
+            data = json.loads(request.body)
+            nombre = (data.get("nombre") or "").strip()
+            if not nombre:
+                return JsonResponse({"success": False, "mensaje": "El nombre del motivo es obligatorio."}, status=400)
+            motivo, creado = MotivoNegativo.objects.get_or_create(nombre=nombre)
+            if not creado and not motivo.activo:
+                motivo.activo = True
+                motivo.save(update_fields=["activo"])
+            return JsonResponse({"success": True, "motivo": {"value": motivo.id, "label": motivo.nombre}})
+        except json.JSONDecodeError:
+            return JsonResponse({"success": False, "mensaje": "Cuerpo de la solicitud inválido."}, status=400)
+
+
 class AdminMotivosNegativa(View):
     """
     Catálogo de motivos de negativa administrable desde la pantalla de
@@ -545,7 +669,7 @@ class AdminMotivosNegativa(View):
     def get(self, request):
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
             return _sin_permiso()
         motivos = MotivoNegativo.objects.all()
         data = [
@@ -562,7 +686,7 @@ class AdminMotivosNegativa(View):
     def post(self, request):
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
             return _sin_permiso()
         try:
             data = json.loads(request.body)
@@ -584,7 +708,7 @@ class AdminMotivoNegativoDetalle(View):
     def post(self, request, motivo_id):
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
             return _sin_permiso()
         try:
             data = json.loads(request.body)
@@ -611,6 +735,26 @@ def listar_motivos_positiva(request):
     return JsonResponse(data, safe=False)
 
 
+class CrearMotivoPositivoRapido(View):
+    """Equivalente a CrearMotivoNegativoRapido, para motivos de positiva."""
+
+    def post(self, request):
+        if not request.user.is_authenticated:
+            return _no_autenticado()
+        try:
+            data = json.loads(request.body)
+            nombre = (data.get("nombre") or "").strip()
+            if not nombre:
+                return JsonResponse({"success": False, "mensaje": "El nombre del motivo es obligatorio."}, status=400)
+            motivo, creado = MotivoPositivo.objects.get_or_create(nombre=nombre)
+            if not creado and not motivo.activo:
+                motivo.activo = True
+                motivo.save(update_fields=["activo"])
+            return JsonResponse({"success": True, "motivo": {"value": motivo.id, "label": motivo.nombre}})
+        except json.JSONDecodeError:
+            return JsonResponse({"success": False, "mensaje": "Cuerpo de la solicitud inválido."}, status=400)
+
+
 class AdminMotivosPositiva(View):
     """
     Catálogo de motivos de positiva administrable desde la pantalla de
@@ -620,7 +764,7 @@ class AdminMotivosPositiva(View):
     def get(self, request):
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
             return _sin_permiso()
         motivos = MotivoPositivo.objects.all()
         data = [
@@ -637,7 +781,7 @@ class AdminMotivosPositiva(View):
     def post(self, request):
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
             return _sin_permiso()
         try:
             data = json.loads(request.body)
@@ -659,7 +803,7 @@ class AdminMotivoPositivoDetalle(View):
     def post(self, request, motivo_id):
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
             return _sin_permiso()
         try:
             data = json.loads(request.body)
@@ -685,7 +829,7 @@ class AdminHorarioLaboral(View):
     def get(self, request):
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
             return _sin_permiso()
         horario = HorarioLaboral.get_actual()
         data = {dia: getattr(horario, dia) for dia in HorarioLaboral.DIAS_ORDEN}
@@ -696,7 +840,7 @@ class AdminHorarioLaboral(View):
     def post(self, request):
         if not request.user.is_authenticated:
             return _no_autenticado()
-        if not request.user.is_staff:
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
             return _sin_permiso()
         try:
             data = json.loads(request.body)

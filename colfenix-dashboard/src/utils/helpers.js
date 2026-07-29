@@ -77,6 +77,20 @@ export function generarIdNovedad(novedades) {
   return `NOV-${anio}-${String(siguiente).padStart(3, "0")}`;
 }
 
+// Duración legible (ej. "2h 15m", "1d 4h") a partir de una cantidad de horas
+// (no ms) — así se recibe desde el backend (horas_habiles_entre ya devuelve
+// horas). null/undefined -> "—".
+export function formatDuracionHoras(horas) {
+  if (horas == null) return "—";
+  const totalMin = Math.round(horas * 60);
+  const dias = Math.floor(totalMin / 1440);
+  const horasResto = Math.floor((totalMin % 1440) / 60);
+  const minutos = totalMin % 60;
+  if (dias > 0) return `${dias}d ${horasResto}h`;
+  if (horasResto > 0) return `${horasResto}h ${minutos}m`;
+  return `${Math.max(1, minutos)}m`;
+}
+
 export function generarIdInforme(informes) {
   const anio = new Date().getFullYear();
   const siguiente = informes.length + 1;

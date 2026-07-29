@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     
     #Aplicaciones
     'apps.Cliente',
+    'apps.configuracion',
     'apps.Informes',
     'apps.mantenimientos',
     'apps.novedades',
@@ -168,5 +169,16 @@ STATIC_URL = 'static/'
 # Media (evidencia adjunta a novedades e informes)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# El constructor de informes (plantillaInforme.jsx) envía las imágenes
+# adjuntas (Logiox, mapa del recorrido, evidencia de eventos, mantenimientos)
+# como data URLs base64 dentro de un único POST JSON, no como multipart. El
+# límite por defecto de Django (2.5 MB) es para APIs normales y se supera
+# fácilmente con solo 2-3 imágenes reales, aunque cada una individualmente
+# respete el máximo de 2 MB que ya valida el frontend por archivo — Django
+# rechaza la petición completa con 400 (RequestDataTooBig) antes de que
+# llegue a la vista. Se sube a 30 MB para dar espacio a un informe con varias
+# imágenes adjuntas de una vez.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 30 * 1024 * 1024
 
 AUTH_USER_MODEL = 'usuarios_colfenix.UsuariosColfenix'
