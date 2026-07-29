@@ -24,7 +24,13 @@ from apps.novedades.views import NovedadDetalleView
 from apps.novedades.views import get_csrf_token
 from apps.novedades.views import listar_ruta
 from apps.novedades.views import formulario_novedades
-from apps.Vehiculo.views import buscar_vehiculo
+from apps.Vehiculo.views import (
+    buscar_vehiculo,
+    AdminConfiguracionDVR,
+    AdminDispositivosDVR,
+    AdminDispositivoDVRDetalle,
+    RegistrarCambioPila,
+)
 from apps.Cliente.views import listar_areas_solicitantes
 from apps.Informes.views import formulario_informes
 from apps.novedades.views import categorias_tipos_informe
@@ -85,6 +91,10 @@ urlpatterns = [
     path('api/informes/<int:informe_id>/', InformeDetalleCompleto.as_view(), name='informe-detalle-completo'),
     path('api/categorias-tipos-informes/', categorias_tipos_informe, name="categorias-tipos-informe"),
     path('api/vehiculo/buscar/', buscar_vehiculo, name="buscar_vehiculo"),
+    path('api/admin/configuracion-dvr/', AdminConfiguracionDVR.as_view(), name='admin-configuracion-dvr'),
+    path('api/admin/dispositivos-dvr/', AdminDispositivosDVR.as_view(), name='admin-dispositivos-dvr'),
+    path('api/admin/dispositivos-dvr/<int:dispositivo_id>/', AdminDispositivoDVRDetalle.as_view(), name='admin-dispositivo-dvr-detalle'),
+    path('api/dispositivos-dvr/<int:dispositivo_id>/registrar-cambio-pila/', RegistrarCambioPila.as_view(), name='registrar-cambio-pila'),
     path('api/rutas/', listar_ruta, name='lista_ruta'),
     path('api/areas/', listar_areas_solicitantes, name='listar_areas'),
     path('api/tipo-informes/', listar_tipoInforme, name='listar-tipo-informes'),

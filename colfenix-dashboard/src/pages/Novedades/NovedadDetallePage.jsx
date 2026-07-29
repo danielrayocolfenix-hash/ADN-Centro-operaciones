@@ -1,36 +1,94 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import ExcelJS from "exceljs";
+import { driver } from "driver.js";
+import "driver.js/dist/driver.css";
 import {
   ArrowLeft, Truck, User, MapPin, Hash, Paperclip, Upload,
-  CheckCircle2, XCircle, Clock, Save,
+  CheckCircle2, XCircle, Clock, Save, HardDrive, LogOut, FileCheck, Lock,
   Download, FileDown, SlidersHorizontal, AlertTriangle, Plus, X,
 } from "lucide-react";
 import { API_BASE } from "../../config/api";
 import { getCsrfToken } from "../../utils/csrf";
-import { formatFechaHora } from "../../utils/helpers";
+import { formatFecha, formatFechaHora } from "../../utils/helpers";
 import Toast from "../../components/ui/Toast";
 import { useAuth } from "../../context/AuthContext";
 import { tienePermiso } from "../../utils/permisos";
 
-const ESTADOS_DD = [
-  { value: "PENDIENTE_DD", label: "Pendiente DD" },
-  { value: "ENCOLADO", label: "Encolado" },
-  { value: "EN_REVISION", label: "En revisión" },
-  { value: "TERMINADO", label: "Terminado" },
-];
+// Recorrido guiado (Driver.js) del flujo de revisión DVR -- se dispara "en
+// vivo" desde una tarjeta de /manual (ManualPage.jsx), que navega acá con
+// location.state = { iniciarTour: true, volverA: "/manual" }. Los `element`
+// apuntan a ids puestos a propósito en Ficha, FlujoWizard, cada PasoSeccion y
+// Trazabilidad; el texto reutiliza las mismas descripciones que ya explican
+// cada paso en pantalla, para no mantener el mismo contenido en dos lugares
+// con redacciones distintas. `onFinish` se llama al cerrar el recorrido
+// (Listo, X o Escape) -- así quien lo abrió desde el manual vuelve ahí, en
+// vez de quedar varado en una novedad real cualquiera.
+function iniciarTourRevisionDVR(onFinish) {
+  const recorrido = driver({
+    showProgress: true,
+    nextBtnText: "Siguiente",
+    prevBtnText: "Anterior",
+    doneBtnText: "Listo",
+    onDestroyed: onFinish,
+    steps: [
+      {
+        element: "#tour-ficha",
+        popover: { title: "Ficha del caso", description: "Resumen rápido: cliente, vehículo, dispositivo DVR y las fechas clave de la novedad." },
+      },
+      {
+        element: "#tour-flujo-wizard",
+        popover: { title: "Flujo del caso", description: "Los 6 pasos de la revisión de un vistazo -- en verde los que ya completaste, resaltado el paso actual." },
+      },
+      {
+        element: "#tour-paso-1",
+        popover: { title: "1. Novedad registrada", description: "Se creó el caso en el sistema y quedó a la espera de que la DVR física llegue a Colfenix." },
+      },
+      {
+        element: "#tour-paso-2",
+        popover: { title: "2. DVR ingresó", description: "El vehículo tiene 2 DVR físicas -- indica cuál de las 2 (Máquina 1 o 2) llegó a Colfenix para revisión. Si la pila de esa máquina está vencida, acá mismo se avisa y se puede registrar el cambio." },
+      },
+      {
+        element: "#tour-paso-3",
+        popover: { title: "3. En revisión", description: "Confirma que ya empezaste a revisar físicamente la grabación de la DVR. Acá también se adjunta la evidencia del caso." },
+      },
+      {
+        element: "#tour-paso-4",
+        popover: { title: "4. Decisión tomada", description: "Registra si la revisión fue Positiva (sí hay grabación) o Negativa (no hay), con el motivo correspondiente." },
+      },
+      {
+        element: "#tour-paso-5",
+        popover: { title: "5. Informe generado", description: "Con la decisión ya tomada, genera el informe formal que se entrega al cliente con los hallazgos de la revisión." },
+      },
+      {
+        element: "#tour-paso-6",
+        popover: { title: "6. DVR salió de Colfenix", description: "Ya con el informe generado, registra la fecha en que la DVR física salió de Colfenix de vuelta al vehículo." },
+      },
+      {
+        element: "#tour-trazabilidad",
+        popover: { title: "Trazabilidad", description: "Historial completo de cada cambio (quién, cuándo, qué), exportable a Excel." },
+      },
+    ],
+  });
+  recorrido.drive();
+}
 
-function Ficha({ novedad, informe }) {
+const ORDEN_ESTADO_DD = ["PENDIENTE_DD", "ENCOLADO", "EN_REVISION", "TERMINADO"];
+
+function Ficha({ novedad }) {
   const campos = [
     { icon: Hash, label: "Código", value: novedad.codigo_novedad },
     { icon: User, label: "Cliente", value: novedad.cliente },
-    { icon: Paperclip, label: "Tipo informe", value: informe?.nombre || novedad.informe?.nombre },
+    { icon: Paperclip, label: "Tipo informe", value: novedad.categoria_informe ? `${novedad.categoria_informe} · ${novedad.tipo_informe}` : novedad.tipo_informe },
     { icon: Truck, label: "Vehículo", value: `${novedad.vehiculo} · ${novedad.numero_interno}` },
+    { icon: HardDrive, label: "Dispositivo DVR", value: novedad.dispositivo_dvr },
+    { icon: HardDrive, label: "Ingreso DVR", value: novedad.fecha_ingreso_dvr ? formatFechaHora(novedad.fecha_ingreso_dvr) : null },
+    { icon: LogOut, label: "Salida DVR", value: novedad.fecha_salida_dvr },
     { icon: User, label: "Conductor", value: novedad.conductor },
     { icon: MapPin, label: "Ruta", value: novedad.ruta },
   ];
   return (
-    <div className="card">
+    <div id="tour-ficha" className="card">
       <div className="grid-3" style={{ gap: 12 }}>
         {campos.map((c) => (
           <div key={c.label} style={{
@@ -54,50 +112,269 @@ function Ficha({ novedad, informe }) {
   );
 }
 
-function Stepper({ estado, onChange, disabled }) {
-  const activeIndex = ESTADOS_DD.findIndex((e) => e.value === estado);
+// Resumen macro del caso completo -- de solo lectura, calculado a partir de
+// datos que ya vienen en `novedad` (sin estado propio en backend). El
+// control real de cada paso vive en las PasoSeccion de abajo (IngresoDVR,
+// EnRevision, DecisionRevision, InformeCard, SalidaDVR); esto es solo el "mapa".
+function calcularPasosFlujo(novedad) {
+  return [
+    { key: "registrada", label: "Registrada", icon: Hash, done: true },
+    { key: "dvr_ingreso", label: "DVR ingresó", icon: HardDrive, done: !!novedad.dispositivo_dvr_id },
+    { key: "revision", label: "En revisión", icon: Clock, done: ["EN_REVISION", "TERMINADO"].includes(novedad.estado_dd) },
+    { key: "decision", label: "Decisión tomada", icon: CheckCircle2, done: !!novedad.respuesta_novedad },
+    { key: "informe", label: "Informe generado", icon: FileCheck, done: !!novedad.tiene_informe },
+    { key: "salida_dvr", label: "DVR salió", icon: LogOut, done: !!novedad.fecha_salida_dvr },
+  ];
+}
+
+function FlujoWizard({ pasos }) {
+  const primerPendiente = pasos.findIndex((p) => !p.done);
+  const current = primerPendiente === -1 ? pasos.length - 1 : primerPendiente;
+
   return (
-    <div className="card">
-      <div className="card-header"><span className="card-title">Estado de revisión DVR</span></div>
+    <div id="tour-flujo-wizard" className="card">
+      <div className="card-header"><span className="card-title">Flujo del caso</span></div>
       <div style={{ display: "flex" }}>
-        {ESTADOS_DD.map((paso, i) => {
-          const done = i <= activeIndex;
-          const current = i === activeIndex;
+        {pasos.map((paso, i) => {
+          const isCurrent = i === current && !paso.done;
           return (
-            <button
-              key={paso.value}
-              onClick={() => !disabled && onChange(paso.value)}
-              disabled={disabled}
-              style={{
-                flex: 1, position: "relative", padding: "18px 4px 0", textAlign: "left",
-                background: "none", border: "none", cursor: disabled ? "default" : "pointer",
-                fontFamily: "inherit", opacity: disabled ? 0.75 : 1,
-              }}
-            >
-              <span style={{
-                position: "absolute", top: 4, left: 0, width: 11, height: 11, borderRadius: "50%",
-                background: done ? "var(--accent-primary)" : "var(--bg-surface)",
-                border: `2px solid ${done ? "var(--accent-primary)" : "var(--border)"}`,
-                boxShadow: current ? "0 0 0 3px var(--accent-glow)" : "none",
-                zIndex: 1,
-              }} />
+            <div key={paso.key} style={{ flex: 1, position: "relative", padding: "0 4px", textAlign: "center" }}>
               {i > 0 && (
                 <span style={{
-                  position: "absolute", top: 9, left: "-50%", right: "50%", height: 2,
-                  background: i <= activeIndex ? "var(--accent-primary)" : "var(--border)",
+                  position: "absolute", top: 15, left: "-50%", right: "50%", height: 2,
+                  background: pasos[i - 1].done ? "var(--accent-success)" : "var(--border)",
                 }} />
               )}
               <div style={{
-                fontSize: 12, fontWeight: current ? 700 : 500,
-                color: current ? "var(--accent-primary)" : done ? "var(--text-primary)" : "var(--text-muted)",
+                width: 30, height: 30, borderRadius: "50%", margin: "0 auto 6px", position: "relative", zIndex: 1,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                background: paso.done ? "var(--accent-success)" : isCurrent ? "var(--accent-primary)" : "var(--bg-surface)",
+                border: `2px solid ${paso.done ? "var(--accent-success)" : isCurrent ? "var(--accent-primary)" : "var(--border)"}`,
+                boxShadow: isCurrent ? "0 0 0 4px var(--accent-glow)" : "none",
+              }}>
+                <paso.icon size={14} color={paso.done || isCurrent ? "#fff" : "var(--text-muted)"} />
+              </div>
+              <div style={{
+                fontSize: 11, fontWeight: isCurrent ? 700 : 500,
+                color: isCurrent ? "var(--accent-primary)" : paso.done ? "var(--text-primary)" : "var(--text-muted)",
               }}>
                 {paso.label}
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
     </div>
+  );
+}
+
+// Contenedor numerado que usan todos los pasos del flujo (2 a 6) para verse
+// como una secuencia real: "hecho" (verde), "actual" (el único accionable,
+// azul) o "bloqueado" (atenuado, sin controles, solo el candado) -- así toda
+// la pantalla queda ordenada de arriba a abajo, no solo la barra de arriba.
+function PasoSeccion({ numero, titulo, descripcion, estado, children }) {
+  const bloqueado = estado === "bloqueado";
+  return (
+    <div id={`tour-paso-${numero}`} className="card" style={{ opacity: bloqueado ? 0.6 : 1 }}>
+      <div className="card-header" style={{ alignItems: "flex-start" }}>
+        <span style={{ display: "flex", gap: 10, minWidth: 0 }}>
+          <span style={{
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: 22, height: 22, borderRadius: "50%", fontSize: 11, fontWeight: 700, flexShrink: 0,
+            background: estado === "hecho" ? "var(--accent-success)" : estado === "actual" ? "var(--accent-primary)" : "var(--bg-surface)",
+            color: bloqueado ? "var(--text-muted)" : "#fff",
+            border: bloqueado ? "2px solid var(--border)" : "none",
+            marginTop: 1,
+          }}>
+            {estado === "hecho" ? <CheckCircle2 size={13} /> : numero}
+          </span>
+          <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+            <span className="card-title" style={{ marginBottom: 0 }}>{titulo}</span>
+            {descripcion && (
+              <span style={{ fontSize: 11.5, color: "var(--text-muted)", fontWeight: 400 }}>{descripcion}</span>
+            )}
+          </span>
+        </span>
+        {estado === "actual" && (
+          <span className="badge" style={{ background: "var(--accent-glow)", color: "var(--accent-primary)", flexShrink: 0 }}>
+            Paso actual
+          </span>
+        )}
+      </div>
+      {bloqueado ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--text-muted)" }}>
+          <Lock size={13} /> Completa el paso anterior para continuar.
+        </div>
+      ) : children}
+    </div>
+  );
+}
+
+// Estado de la pila de cada dispositivo -- lo calcula el backend
+// (apps.Vehiculo.pila.calcular_estado_pila) contra la caducidad configurada
+// en Administración › Configuración SLA › Caducidad de pila de la DVR.
+const PILA_ESTADO_INFO = {
+  vencida: { label: "Pila vencida -- cambio urgente", sufijo: "⚠ pila vencida", color: "var(--accent-danger)", bg: "var(--accent-danger-soft)" },
+  por_vencer: { label: "Pila por vencer", sufijo: "⚠ pila por vencer", color: "var(--accent-warn)", bg: "var(--accent-warn-soft)" },
+  vigente: { label: "Pila vigente", sufijo: null, color: "var(--accent-success)", bg: "var(--accent-success-soft)" },
+  sin_registro: { label: "Sin registro de cambio de pila", sufijo: null, color: "var(--text-muted)", bg: "var(--bg-surface)" },
+};
+
+// Ícono de reloj que abre el selector de fecha nativo y, al elegir una
+// fecha, registra el cambio de pila de una sola vez -- acceso rápido para
+// cuando la pila aparece vencida, sin salir del flujo hacia Administración.
+function BotonCambioPila({ dispositivoId, onRegistrar }) {
+  const inputRef = useRef(null);
+  const [guardando, setGuardando] = useState(false);
+
+  const abrirSelector = () => {
+    if (guardando) return;
+    if (inputRef.current?.showPicker) inputRef.current.showPicker();
+    else inputRef.current?.click();
+  };
+
+  const onChange = async (e) => {
+    const fecha = e.target.value;
+    if (!fecha) return;
+    setGuardando(true);
+    try {
+      await onRegistrar(dispositivoId, fecha);
+    } finally {
+      setGuardando(false);
+      e.target.value = "";
+    }
+  };
+
+  return (
+    <span style={{ position: "relative", display: "inline-flex", marginLeft: 6 }}>
+      <button
+        type="button"
+        onClick={abrirSelector}
+        disabled={guardando}
+        title="Registrar cambio de pila"
+        style={{
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: 18, height: 18, borderRadius: "50%", border: "none",
+          cursor: guardando ? "default" : "pointer", background: "rgba(255,255,255,0.35)", color: "inherit",
+          flexShrink: 0, padding: 0,
+        }}
+      >
+        <Clock size={11} />
+      </button>
+      <input
+        ref={inputRef}
+        type="date"
+        onChange={onChange}
+        style={{ position: "absolute", opacity: 0, width: 0, height: 0, pointerEvents: "none" }}
+      />
+    </span>
+  );
+}
+
+// Contenido del paso "DVR ingresó" -- sin card propia, vive dentro de
+// PasoSeccion. Elegir una máquina marca ENCOLADO solo (ver
+// handleDispositivoDvr en el componente principal).
+function IngresoDVR({ dispositivoDvrId, dispositivosDisponibles, onDispositivoDvr, fechaIngreso, onRegistrarCambioPila, disabled }) {
+  const seleccionado = dispositivosDisponibles.find((d) => d.id === dispositivoDvrId);
+  const estadoPila = seleccionado && PILA_ESTADO_INFO[seleccionado.estado];
+
+  return (
+    <>
+      <div className="form-group" style={{ marginBottom: 0 }}>
+        <label className="form-label">¿Qué máquina llegó a revisión?</label>
+        {dispositivosDisponibles.length > 0 ? (
+          <select
+            className="form-input"
+            value={dispositivoDvrId ?? ""}
+            onChange={(e) => onDispositivoDvr(e.target.value ? Number(e.target.value) : null)}
+            disabled={disabled}
+          >
+            <option value="">Sin especificar</option>
+            {dispositivosDisponibles.map((d) => {
+              const info = PILA_ESTADO_INFO[d.estado];
+              return (
+                <option key={d.id} value={d.id}>
+                  {d.label}{info?.sufijo ? ` -- ${info.sufijo}` : ""}
+                </option>
+              );
+            })}
+          </select>
+        ) : (
+          <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
+            No hay dispositivos DVR registrados para este vehículo.
+          </div>
+        )}
+      </div>
+      {estadoPila && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            marginTop: 10,
+            padding: "6px 10px",
+            borderRadius: "var(--radius-sm)",
+            background: estadoPila.bg,
+            color: estadoPila.color,
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          {(seleccionado.estado === "vencida" ||
+            seleccionado.estado === "por_vencer") && (
+            <AlertTriangle size={13} />
+          )}
+
+          {seleccionado.estado === "vencida" && (
+            <span>
+              {estadoPila.label}: se venció el <strong>{formatFecha(seleccionado.proxima_fecha)}</strong>
+              {" "}(hace <strong>{seleccionado.dias_vencida} días</strong>).
+              <BotonCambioPila dispositivoId={seleccionado.id} onRegistrar={onRegistrarCambioPila} />
+            </span>
+          )}
+
+          {seleccionado.estado === "por_vencer" && (
+            <span>
+              {estadoPila.label}: vence el <strong>{formatFecha(seleccionado.proxima_fecha)}</strong>
+              {" "}(en <strong>{seleccionado.dias_restantes} días</strong>). Último cambio de pila:{" "}
+              {formatFecha(seleccionado.fecha_ultimo_cambio_pila)}.
+            </span>
+          )}
+
+          {seleccionado.estado === "vigente" && (
+            <span>
+              {estadoPila.label} hasta el <strong>{formatFecha(seleccionado.proxima_fecha)}</strong>
+              {" "}(<strong>{seleccionado.dias_restantes} días</strong>).
+            </span>
+          )}
+
+          {seleccionado.estado === "sin_registro" && (
+            <span>{estadoPila.label}.</span>
+          )}
+        </div>
+      )}
+      {fechaIngreso && (
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>
+          Ingresó a Colfenix: {formatFechaHora(fechaIngreso)} -- quedó marcado ENCOLADO automáticamente.
+        </div>
+      )}
+    </>
+  );
+}
+
+// Contenido del paso "En revisión" -- una sola acción: el analista confirma
+// que empezó a revisar la DVR físicamente. TERMINADO ya no se marca acá, se
+// deriva solo al tomar la decisión (ver handleRespuesta).
+function EnRevision({ estadoDD, fechaInicioRevision, onMarcarEnRevision, disabled }) {
+  const yaEnRevision = estadoDD === "EN_REVISION" || estadoDD === "TERMINADO";
+  return yaEnRevision ? (
+    <div style={{ fontSize: 13, color: "var(--accent-success)", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+      <CheckCircle2 size={15} /> En revisión{fechaInicioRevision ? ` desde ${formatFechaHora(fechaInicioRevision)}` : ""}
+    </div>
+  ) : (
+    <button className="btn btn-primary btn-sm" onClick={onMarcarEnRevision} disabled={disabled}>
+      <Clock size={13} /> Marcar en revisión
+    </button>
   );
 }
 
@@ -220,8 +497,7 @@ function DecisionRevision({
   disabled,
 }) {
   return (
-    <div className="card">
-      <div className="card-header"><span className="card-title">Resultado de la revisión</span></div>
+    <>
       <div style={{ display: "flex", gap: 10, marginBottom: respuesta ? 16 : 0 }}>
         <button
           className={`btn ${respuesta === "Positiva" ? "btn-success" : "btn-secondary"}`}
@@ -297,11 +573,17 @@ function DecisionRevision({
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
-const TRAZA_LABELS = { estado_dd: "Estado DD", respuesta_novedad: "Respuesta", creacion: "Creación" };
+const TRAZA_LABELS = {
+  estado_dd: "Estado DD",
+  respuesta_novedad: "Respuesta",
+  dispositivo_dvr: "Dispositivo DVR",
+  fecha_salida_dvr: "Salida de la DVR",
+  creacion: "Creación",
+};
 
 const COLUMNAS_EXPORT = [
   { key: "fecha", label: "Fecha" },
@@ -556,7 +838,7 @@ function Trazabilidad({ novedad, eventos, puedeExportar }) {
   };
 
   return (
-    <div className="card">
+    <div id="tour-trazabilidad" className="card">
       <div className="card-header">
         <span className="card-title"><Clock size={15} /> Trazabilidad</span>
         <div style={{ display: "flex", gap: 6 }}>
@@ -728,6 +1010,91 @@ function PanelSLA({ novedad }) {
   );
 }
 
+// Acceso directo al flujo de generación de informe (hoy solo existía desde
+// el listado de Novedades) -- misma condición que ya usa NovedadesPage/
+// ModalNovedad para habilitar el botón (estado_novedad ya no es
+// "Pendiente_por_responder", es decir, ya hay una decisión Positiva/Negativa
+// guardada) más el permiso correspondiente.
+// Tarjeta de acceso directo al PDF del informe -- el PDF en sí no se guarda
+// en el servidor (se genera al vuelo en el navegador desde InformesPage con
+// html2pdf), así que esto no es una miniatura real del documento, es un
+// atajo: código + resultado + fecha, que al hacer clic abre ese informe
+// puntual en Informes (donde ya existe el botón "Descargar PDF").
+function InformePoster({ informe, onAbrir }) {
+  if (!informe) {
+    return (
+      <div className="card" style={{ display: "flex", alignItems: "center", gap: 10, opacity: 0.6 }}>
+        <FileCheck size={20} color="var(--text-muted)" />
+        <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Aún no hay informe generado.</span>
+      </div>
+    );
+  }
+  const positivo = informe.resultado === "Positiva";
+  return (
+    <button
+      onClick={onAbrir}
+      className="card"
+      style={{
+        display: "flex", alignItems: "center", gap: 12, textAlign: "left",
+        width: "100%", cursor: "pointer", fontFamily: "inherit",
+      }}
+    >
+      <div style={{
+        width: 40, height: 40, borderRadius: "var(--radius-sm)", flexShrink: 0,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        background: positivo ? "var(--accent-success-soft)" : "var(--accent-danger-soft)",
+        color: positivo ? "var(--accent-success)" : "var(--accent-danger)",
+      }}>
+        <FileCheck size={20} />
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>{informe.codigo}</div>
+        <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+          {informe.resultado} · {formatFechaHora(informe.fecha_creacion)}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// Contenido del paso "Informe generado" -- PasoSeccion ya se encarga de no
+// mostrar esto hasta que la decisión (paso anterior) esté tomada, así que
+// acá solo falta distinguir generado / falta permiso / listo para generar.
+function InformeCard({ novedad, puedeGenerar, onGenerarInforme }) {
+  if (novedad.tiene_informe) {
+    return (
+      <div style={{ fontSize: 13, color: "var(--accent-success)", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+        <CheckCircle2 size={15} /> Informe generado
+      </div>
+    );
+  }
+  return puedeGenerar ? (
+    <button className="btn btn-primary btn-sm" onClick={onGenerarInforme}>
+      <FileCheck size={13} /> Generar informe
+    </button>
+  ) : (
+    <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Informe pendiente de generar.</div>
+  );
+}
+
+// Fecha manual de salida de la DVR de Colfenix -- PasoSeccion ya no la
+// muestra hasta que exista un informe generado (el backend también lo
+// valida en NovedadDetalleView.post()).
+function SalidaDVR({ fechaSalidaDvr, onFechaSalidaDvr, disabled }) {
+  return (
+    <div className="form-group" style={{ marginBottom: 0 }}>
+      <label className="form-label">Fecha en que la DVR salió de Colfenix</label>
+      <input
+        type="date"
+        className="form-input"
+        value={fechaSalidaDvr || ""}
+        onChange={(e) => onFechaSalidaDvr(e.target.value)}
+        disabled={disabled}
+      />
+    </div>
+  );
+}
+
 function Evidencia({ evidencias, onUpload, subiendo, puedeSubir, onEliminar }) {
   const [eliminandoId, setEliminandoId] = useState(null);
 
@@ -742,8 +1109,10 @@ function Evidencia({ evidencias, onUpload, subiendo, puedeSubir, onEliminar }) {
   };
 
   return (
-    <div className="card">
-      <div className="card-header"><span className="card-title"><Paperclip size={15} /> Evidencia adjunta</span></div>
+    <div>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", margin: "16px 0 10px", display: "flex", alignItems: "center", gap: 6 }}>
+        <Paperclip size={12} /> Evidencia adjunta
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 10, marginBottom: 14 }}>
         {evidencias.map((ev) => (
           <div
@@ -796,10 +1165,12 @@ function Evidencia({ evidencias, onUpload, subiendo, puedeSubir, onEliminar }) {
 export default function NovedadDetallePage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const puedeEditar = tienePermiso(user, "novedades.editar");
   const puedeSubirEvidencia = tienePermiso(user, "novedades.subir_evidencia");
   const puedeExportar = tienePermiso(user, "novedades.exportar");
+  const puedeGenerarInforme = tienePermiso(user, "novedades.generar_informe");
 
   const [novedad, setNovedad] = useState(null);
   const [eventos, setEventos] = useState([]);
@@ -817,6 +1188,20 @@ export default function NovedadDetallePage() {
   const [detalle, setDetalle] = useState("");
   const [motivoPositivoId, setMotivoPositivoId] = useState(null);
   const [detallePositivo, setDetallePositivo] = useState("");
+  const [dispositivoDvrId, setDispositivoDvrId] = useState(null);
+  const [fechaSalidaDvr, setFechaSalidaDvr] = useState("");
+
+  // Llega desde una tarjeta "Ver en vivo" de /manual (ver ManualPage.jsx):
+  // navigate(`/novedades/${id}`, { state: { iniciarTour: true, volverA: "/manual" } }).
+  // El `tourIniciadoRef` evita relanzarlo si el componente vuelve a renderizar
+  // mientras el usuario ya está viendo el recorrido.
+  const tourIniciadoRef = useRef(false);
+  useEffect(() => {
+    if (!location.state?.iniciarTour || tourIniciadoRef.current || loading || !novedad) return;
+    tourIniciadoRef.current = true;
+    const volverA = location.state.volverA || "/manual";
+    iniciarTourRevisionDVR(() => navigate(volverA));
+  }, [location.state, loading, novedad, navigate]);
 
   const cargarNovedad = useCallback(async () => {
     const res = await fetch(`${API_BASE}/api/novedades/${id}/`, { credentials: "include" });
@@ -829,6 +1214,8 @@ export default function NovedadDetallePage() {
     setDetalle(data.detalle_motivo_negativo || "");
     setMotivoPositivoId(data.motivo_positivo_id);
     setDetallePositivo(data.detalle_motivo_positivo || "");
+    setDispositivoDvrId(data.dispositivo_dvr_id);
+    setFechaSalidaDvr(data.fecha_salida_dvr || "");
   }, [id]);
 
   const cargarEventos = useCallback(async () => {
@@ -839,7 +1226,7 @@ export default function NovedadDetallePage() {
   // Actualiza solo los campos de SLA/estado_dd en vivo, sin tocar el estado
   // editable local (estadoDD, respuesta, motivoId, detalle) — un refresco
   // completo vía cargarNovedad() revertiría cualquier cambio sin guardar del
-  // analista en el Stepper o la Decisión de revisión.
+  // analista en el flujo de pasos (estado DD, decisión, etc.).
   const actualizarSLA = useCallback(async () => {
     const res = await fetch(`${API_BASE}/api/novedades/${id}/`, { credentials: "include" });
     if (!res.ok) return;
@@ -888,6 +1275,49 @@ export default function NovedadDetallePage() {
     return () => { cancelado = true; };
   }, [cargarNovedad, cargarEventos]);
 
+  // El flujo avanza solo a partir de las decisiones reales del analista, sin
+  // pasos manuales redundantes: elegir la máquina que llegó ya implica que
+  // la DVR está ENCOLADA, y tomar la decisión (Positiva/Negativa) ya implica
+  // que la revisión TERMINÓ. "En revisión" queda como el único paso manual
+  // real (botón en EnRevision), porque no hay ningún otro dato que lo derive.
+  const avanzarEstadoDD = (minimo) => {
+    setEstadoDD((actual) => (
+      ORDEN_ESTADO_DD.indexOf(actual) < ORDEN_ESTADO_DD.indexOf(minimo) ? minimo : actual
+    ));
+  };
+
+  const handleDispositivoDvr = (valor) => {
+    setDispositivoDvrId(valor);
+    if (valor) avanzarEstadoDD("ENCOLADO");
+  };
+
+  const handleRespuesta = (valor) => {
+    setRespuesta(valor);
+    avanzarEstadoDD("TERMINADO");
+  };
+
+  const marcarEnRevision = () => avanzarEstadoDD("EN_REVISION");
+
+  // Acceso rápido desde el botón de reloj en IngresoDVR -- no pasa por
+  // handleGuardar, se guarda de inmediato contra el dispositivo puntual y
+  // se refresca la novedad para traer el estado de pila ya actualizado.
+  const handleRegistrarCambioPila = async (dispositivoId, fecha) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/dispositivos-dvr/${dispositivoId}/registrar-cambio-pila/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": getCsrfToken() },
+        credentials: "include",
+        body: JSON.stringify({ fecha }),
+      });
+      const resultado = await res.json();
+      if (!resultado.success) throw new Error(resultado.mensaje || "No se pudo registrar el cambio de pila");
+      await cargarNovedad();
+      setToast({ msg: "Cambio de pila registrado", type: "success" });
+    } catch (err) {
+      setToast({ msg: `Error: ${err.message}`, type: "error" });
+    }
+  };
+
   const handleGuardar = async () => {
     setSaving(true);
     try {
@@ -898,6 +1328,8 @@ export default function NovedadDetallePage() {
         body: JSON.stringify({
           estado_dd: estadoDD,
           respuesta_novedad: respuesta,
+          dispositivo_dvr_id: dispositivoDvrId || null,
+          fecha_salida_dvr: fechaSalidaDvr || null,
           motivo_negativo_id: respuesta === "Negativa" ? motivoId : null,
           detalle_motivo_negativo: respuesta === "Negativa" ? detalle : "",
           motivo_positivo_id: respuesta === "Positiva" ? motivoPositivoId : null,
@@ -1003,6 +1435,22 @@ export default function NovedadDetallePage() {
     );
   }
 
+  // El asistente debe reflejar lo que el usuario ya eligió en pantalla, no
+  // solo lo último que se guardó -- si no, el paso siguiente se ve
+  // "bloqueado" hasta apretar Guardar cambios, aunque ya se eligió la
+  // máquina / se marcó en revisión / se tomó la decisión.
+  const novedadEnProgreso = {
+    ...novedad,
+    dispositivo_dvr_id: dispositivoDvrId,
+    estado_dd: estadoDD,
+    respuesta_novedad: respuesta,
+    fecha_salida_dvr: fechaSalidaDvr,
+  };
+  const pasosFlujo = calcularPasosFlujo(novedadEnProgreso);
+  const estadoPaso = (i) => (
+    pasosFlujo[i].done ? "hecho" : pasosFlujo.slice(0, i).every((p) => p.done) ? "actual" : "bloqueado"
+  );
+
   return (
     <div className="page-shell">
       <div className="hero-panel compact">
@@ -1023,20 +1471,75 @@ export default function NovedadDetallePage() {
       </div>
 
       <Ficha novedad={novedad} />
-      <Stepper estado={estadoDD} onChange={setEstadoDD} disabled={!puedeEditar} />
+      <FlujoWizard pasos={pasosFlujo} />
+
+      <div className="grid-2" style={{ alignItems: "start" }}>
+        <PasoSeccion
+          numero={1}
+          titulo="Novedad registrada"
+          descripcion="Se creó el caso en el sistema y quedó a la espera de que la DVR física llegue a Colfenix."
+          estado="hecho"
+        >
+          <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
+            Registrada el {formatFechaHora(novedad.fecha_creacion)} por {novedad.analista}.
+          </div>
+        </PasoSeccion>
+
+        <PasoSeccion
+          numero={2}
+          titulo="DVR ingresó"
+          descripcion="El vehículo tiene 2 DVR físicas -- indica cuál de las 2 (Máquina 1 o 2) llegó a Colfenix para revisión."
+          estado={estadoPaso(1)}
+        >
+          <IngresoDVR
+            dispositivoDvrId={dispositivoDvrId}
+            dispositivosDisponibles={novedad.dispositivos_dvr_disponibles || []}
+            onDispositivoDvr={handleDispositivoDvr}
+            fechaIngreso={novedad.fecha_ingreso_dvr}
+            onRegistrarCambioPila={handleRegistrarCambioPila}
+            disabled={!puedeEditar}
+          />
+        </PasoSeccion>
+      </div>
 
       <div className="grid-2" style={{ alignItems: "start" }}>
         <PanelEsperaDD novedad={novedad} />
         <PanelSLA novedad={novedad} />
       </div>
 
-      <div className="grid-2" style={{ alignItems: "start" }}>
+      <PasoSeccion
+        numero={3}
+        titulo="En revisión"
+        descripcion="Confirma que ya empezaste a revisar físicamente la grabación de la DVR. Acá también se adjunta la evidencia del caso."
+        estado={estadoPaso(2)}
+      >
+        <EnRevision
+          estadoDD={estadoDD}
+          fechaInicioRevision={novedad.fecha_inicio_revision}
+          onMarcarEnRevision={marcarEnRevision}
+          disabled={!puedeEditar}
+        />
+        <Evidencia
+          evidencias={novedad.evidencias || []}
+          onUpload={handleUpload}
+          subiendo={subiendoEvidencia}
+          puedeSubir={puedeSubirEvidencia}
+          onEliminar={handleEliminarEvidencia}
+        />
+      </PasoSeccion>
+
+      <PasoSeccion
+        numero={4}
+        titulo="Decisión tomada"
+        descripcion="Registra si la revisión fue Positiva (sí hay grabación) o Negativa (no hay), con el motivo correspondiente."
+        estado={estadoPaso(3)}
+      >
         <DecisionRevision
           respuesta={respuesta}
           motivoId={motivoId}
           detalle={detalle}
           motivos={motivos}
-          onRespuesta={setRespuesta}
+          onRespuesta={handleRespuesta}
           onMotivo={setMotivoId}
           onDetalle={setDetalle}
           motivosPositivos={motivosPositivos}
@@ -1048,8 +1551,41 @@ export default function NovedadDetallePage() {
           onCrearMotivoPositivo={crearMotivoPositivo}
           disabled={!puedeEditar}
         />
-        <Trazabilidad novedad={novedad} eventos={eventos} puedeExportar={puedeExportar} />
+      </PasoSeccion>
+
+      <PasoSeccion
+        numero={5}
+        titulo="Informe generado"
+        descripcion="Con la decisión ya tomada, genera el informe formal que se entrega al cliente con los hallazgos de la revisión."
+        estado={estadoPaso(4)}
+      >
+        <InformeCard
+          novedad={novedad}
+          puedeGenerar={puedeGenerarInforme}
+          onGenerarInforme={() => navigate("/informes/generar", { state: { novedad } })}
+        />
+      </PasoSeccion>
+
+      <div className="grid-2" style={{ alignItems: "start" }}>
+        <InformePoster
+          informe={novedad.informe}
+          onAbrir={() => navigate("/informes", { state: { abrirInformeId: novedad.informe?.id } })}
+        />
+        <PasoSeccion
+          numero={6}
+          titulo="DVR salió de Colfenix"
+          descripcion="Ya con el informe generado, registra la fecha en que la DVR física salió de Colfenix de vuelta al vehículo."
+          estado={estadoPaso(5)}
+        >
+          <SalidaDVR
+            fechaSalidaDvr={fechaSalidaDvr}
+            onFechaSalidaDvr={setFechaSalidaDvr}
+            disabled={!puedeEditar}
+          />
+        </PasoSeccion>
       </div>
+
+      <Trazabilidad novedad={novedad} eventos={eventos} puedeExportar={puedeExportar} />
 
       <Evidencia
         evidencias={novedad.evidencias || []}

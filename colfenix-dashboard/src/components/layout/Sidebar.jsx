@@ -1,7 +1,7 @@
 import React from "react";
 import {
   LayoutDashboard, Users, Wrench, AlertTriangle, FileText,
-  Radio, MapPin, Clock, BarChart3, Settings, ShieldCheck,
+  Radio, MapPin, Clock, BarChart3, Settings, ShieldCheck, BookOpen,
 } from "lucide-react";
 import { API_BASE } from "../../config/api";
 import { useSiteConfig } from "../../context/SiteConfigContext";
@@ -26,19 +26,19 @@ const navItems = [
     id: "administracion/metricas-analistas", label: "Métricas de analistas", icon: BarChart3,
     group: "Administración", activeId: "administracion", permiso: "vista.administracion_metricas",
   },
-  {
-    id: "administracion/sitio", label: "Configuración del sitio", icon: Settings,
-    group: "Administración", activeId: "administracion", permiso: "vista.administracion_sitio",
-  },
+
   {
     id: "administracion/usuarios", label: "Usuarios y permisos", icon: ShieldCheck,
     group: "Administración", activeId: "administracion", permiso: "vista.administracion_usuarios",
   },
+  // Sin `permiso` -- visible para cualquier usuario. Pantalla propia con
+  // recorridos guiados (Driver.js) "en vivo" sobre novedades reales.
+  { id: "manual", label: "Manual de uso", icon: BookOpen, group: "Ayuda" },
 ];
 
 export default function Sidebar({ active, onNavigate, alertCount, user }) {
   const { config } = useSiteConfig();
-  const visibles = navItems.filter((i) => tienePermiso(user, i.permiso));
+  const visibles = navItems.filter((i) => !i.permiso || tienePermiso(user, i.permiso));
   const groups = [...new Set(visibles.map(i => i.group))];
 
   return (

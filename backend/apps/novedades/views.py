@@ -8,7 +8,8 @@ from django.db.models import Count
 from django.db.models import Count, Q
 from apps.novedades.models import Novedades, MotivoNegativo, MotivoPositivo, NovedadEvento, NovedadEvidencia, HorarioLaboral
 from apps.novedades.horario_laboral import calcular_sla_novedad, calcular_espera_dd, horas_habiles_entre
-from apps.Vehiculo.models import Ruta
+from apps.Vehiculo.models import Ruta, DispositivoDVR, ConfiguracionDVR
+from apps.Vehiculo.pila import calcular_estado_pila
 from apps.Informes.models import CategoriaTipoInforme, Informe
 from apps.novedades.forms_schema import NOVEDADES_FORM
 from apps.usuarios_colfenix.models import UsuariosColfenix
@@ -33,6 +34,7 @@ def _novedades_queryset():
         'tipo_informe__categoria_informe',
         'ruta',
         'analista',
+        'dispositivo_dvr',
         'motivo_negativo',
         'motivo_positivo',
     )
@@ -123,6 +125,11 @@ def _serializar_novedad(novedad, detalle=False, horario=None):
 
         'respuesta_novedad': novedad.respuesta_novedad,
 
+        'dispositivo_dvr_id': novedad.dispositivo_dvr_id,
+        'dispositivo_dvr': str(novedad.dispositivo_dvr) if novedad.dispositivo_dvr_id else None,
+        'fecha_ingreso_dvr': novedad.fecha_ingreso_dvr,
+        'fecha_salida_dvr': novedad.fecha_salida_dvr,
+
         'motivo_negativo_id': novedad.motivo_negativo_id,
         'motivo_negativo': novedad.motivo_negativo.nombre if novedad.motivo_negativo_id else None,
         'detalle_motivo_negativo': novedad.detalle_motivo_negativo,
@@ -162,6 +169,24 @@ def _serializar_novedad(novedad, detalle=False, horario=None):
             }
             for ev in novedad.evidencias.all()
         ]
+        meses_caducidad = ConfiguracionDVR.get_actual().meses_caducidad_pila
+        data['dispositivos_dvr_disponibles'] = [
+            {
+                'id': d.id,
+                'numero_maquina': d.numero_maquina,
+                'marca': d.marca,
+                'label': str(d),
+                **calcular_estado_pila(d.fecha_ultimo_cambio_pila, meses_caducidad),
+            }
+            for d in novedad.vehiculo.dispositivos_dvr.all()
+        ]
+        ultimo_informe = novedad.informes.order_by('-fecha_creacion').first()
+        data['informe'] = {
+            'id': ultimo_informe.id,
+            'codigo': ultimo_informe.codigo,
+            'resultado': ultimo_informe.resultado,
+            'fecha_creacion': ultimo_informe.fecha_creacion,
+        } if ultimo_informe else None
 
     return data
 
@@ -306,6 +331,7 @@ class NovedadDetalleView(View):
     # FKs opcionales: null explícito sí las limpia (ej. al pasar de Negativa
     # a Positiva hay que poder borrar el motivo ya seleccionado).
     CAMPOS_FK_OPCIONALES = {
+        "dispositivo_dvr_id": "dispositivo_dvr_id",
         "motivo_negativo_id": "motivo_negativo_id",
         "motivo_positivo_id": "motivo_positivo_id",
     }
@@ -316,10 +342,11 @@ class NovedadDetalleView(View):
         "detalle_motivo_positivo",
         "pasajeros_reportados", "estado_novedad",
         "fecha_recepcion_dd", "fecha_inicio_revision", "fecha_fin_revision",
+        "fecha_ingreso_dvr", "fecha_salida_dvr",
     }
 
     # cambios en estos campos quedan registrados en NovedadEvento
-    CAMPOS_TRAZABLES = {"estado_dd", "respuesta_novedad"}
+    CAMPOS_TRAZABLES = {"estado_dd", "respuesta_novedad", "fecha_salida_dvr"}
 
     def get(self, request, novedad_id):
         if not request.user.is_authenticated:
@@ -341,6 +368,12 @@ class NovedadDetalleView(View):
             data = json.loads(request.body)
             novedad = Novedades.objects.get(id=novedad_id)
 
+            if data.get("fecha_salida_dvr") and not novedad.informes.exists():
+                return JsonResponse({
+                    "success": False,
+                    "mensaje": "No se puede registrar la fecha de salida antes de generar el informe.",
+                }, status=400)
+
             cambios_trazables = []
             for campo in self.CAMPOS_TRAZABLES:
                 if campo in data:
@@ -348,6 +381,33 @@ class NovedadDetalleView(View):
                     valor_nuevo = data[campo]
                     if str(valor_anterior) != str(valor_nuevo):
                         cambios_trazables.append((campo, valor_anterior, valor_nuevo))
+
+            # Si cambia el vehículo de la novedad (modal "Editar" del listado,
+            # que reutiliza este mismo endpoint), el dispositivo_dvr ya
+            # asignado queda apuntando al vehículo anterior -- se limpia acá
+            # en vez de dejar una referencia inconsistente.
+            if "vehiculo_id" in data and str(data["vehiculo_id"]) != str(novedad.vehiculo_id):
+                data["dispositivo_dvr_id"] = None
+                data["fecha_ingreso_dvr"] = None
+                data["fecha_salida_dvr"] = None
+
+            # Traza legible del cambio de dispositivo DVR -- manual porque es
+            # una FK y queremos el texto ("Máquina 1 · Marca"), no el id
+            # crudo, en NovedadEvento. La fecha de ingreso se sella sola acá,
+            # la primera vez que se asigna un dispositivo -- no se traza
+            # aparte, ocurre en el mismo evento que el cambio de dispositivo.
+            if "dispositivo_dvr_id" in data:
+                nuevo_id = data["dispositivo_dvr_id"] or None
+                if nuevo_id != novedad.dispositivo_dvr_id:
+                    anterior_dvr = novedad.dispositivo_dvr
+                    nuevo_dvr = DispositivoDVR.objects.filter(id=nuevo_id).first() if nuevo_id else None
+                    cambios_trazables.append((
+                        "dispositivo_dvr",
+                        str(anterior_dvr) if anterior_dvr else None,
+                        str(nuevo_dvr) if nuevo_dvr else None,
+                    ))
+                    if nuevo_dvr and not novedad.fecha_ingreso_dvr:
+                        data["fecha_ingreso_dvr"] = timezone.now()
 
             if "estado_dd" in data:
                 data.update(_completar_timestamps_hasta(novedad, data["estado_dd"], timezone.now(), data))

@@ -44,6 +44,76 @@ class Vehiculo(models.Model):
         return f"{self.numero_interno} - {self.placa}"
 
 
+class DispositivoDVR(models.Model):
+
+    MAQUINA_CHOICES = [
+        (1, 'Máquina 1'),
+        (2, 'Máquina 2'),
+    ]
+
+    vehiculo = models.ForeignKey(
+        Vehiculo,
+        on_delete=models.CASCADE,
+        related_name='dispositivos_dvr'
+    )
+
+    numero_maquina = models.PositiveSmallIntegerField(
+        choices=MAQUINA_CHOICES
+    )
+
+    marca = models.CharField(
+        max_length=100
+    )
+
+    numero_serie = models.CharField(
+        max_length=100,
+        blank=True
+    )
+
+    fecha_ultimo_cambio_pila = models.DateField(
+        null=True,
+        blank=True
+    )
+
+    fecha_actualizacion = models.DateTimeField(
+        auto_now=True
+    )
+
+    class Meta:
+        unique_together = ('vehiculo', 'numero_maquina')
+        ordering = ['vehiculo', 'numero_maquina']
+        verbose_name = 'Dispositivo DVR'
+        verbose_name_plural = 'Dispositivos DVR'
+
+    def __str__(self):
+        return f"{self.get_numero_maquina_display()} · {self.marca}"
+
+
+class ConfiguracionDVR(models.Model):
+    """
+    Configuración global (fila única, id=1 siempre) del flujo de DVR --
+    mismo patrón singleton que HorarioLaboral en apps.novedades. Por ahora
+    solo el período de caducidad de la pila, administrable desde
+    /administracion/sla por un usuario con administracion.gestionar_novedades.
+    """
+
+    meses_caducidad_pila = models.PositiveSmallIntegerField(default=6)
+
+    actualizado = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_actual(cls):
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def __str__(self):
+        return f"Caducidad de pila: {self.meses_caducidad_pila} meses"
+
+
 class GrupoFlota(models.Model):
 
     cliente = models.ForeignKey(

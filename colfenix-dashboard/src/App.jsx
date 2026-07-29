@@ -18,6 +18,7 @@ import ConfiguracionSLAPage from "./pages/Administracion/ConfiguracionSLA";
 import MetricasAnalistasPage from "./pages/Administracion/MetricasAnalistas";
 import ConfiguracionSitioPage from "./pages/Administracion/ConfiguracionSitio";
 import UsuariosPage from "./pages/Administracion/Usuarios";
+import ManualPage from "./pages/ManualPage";
 import LoginPage from "./pages/LoginPage";
 import { novedades } from "./data/mockData";
 import { API_BASE } from "./config/api";
@@ -181,6 +182,7 @@ function Shell() {
             <Route path="/administracion/usuarios" element={
               <Guard user={user} permiso="vista.administracion_usuarios"><UsuariosPage /></Guard>
             } />
+            <Route path="/manual" element={<ManualPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>

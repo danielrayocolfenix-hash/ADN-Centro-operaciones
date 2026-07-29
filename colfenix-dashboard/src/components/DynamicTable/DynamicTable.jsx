@@ -210,6 +210,34 @@ function ColumnSelector({ columns, visible, onChange }) {
   );
 }
 
+// ─── Botón "Filtros" ─────────────────────────────────────────────────────────
+// Los filtros por columna ya no viven fijos dentro de la tabla (una fila de
+// inputs por cada columna visible ensuciaba mucho la vista) -- ahora se
+// muestran/ocultan desde este botón, igual de discreto que "Columnas".
+function FiltrosToggle({ open, onToggle, activeCount }) {
+  return (
+    <button
+      onClick={onToggle}
+      className="btn btn-secondary btn-sm"
+      style={{ gap: 6, ...(open ? { color: "var(--accent-primary)", borderColor: "var(--border-accent)" } : {}) }}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3" />
+      </svg>
+      Filtros
+      {activeCount > 0 && (
+        <span style={{
+          background: "var(--accent-glow)", color: "var(--accent-primary)",
+          border: "1px solid var(--border-accent)",
+          borderRadius: 99, padding: "0 6px", fontSize: 10, fontWeight: 700,
+        }}>
+          {activeCount}
+        </span>
+      )}
+    </button>
+  );
+}
+
 // ─── Spinner ─────────────────────────────────────────────────────────────────
 function Spinner() {
   return (
@@ -261,6 +289,7 @@ export default function NovedadesTable({
 
   const [globalFilter, setGlobalFilter]   = useState("");
   const [columnFilters, setColumnFilters] = useState({});
+  const [filtrosAbiertos, setFiltrosAbiertos] = useState(false);
   const [pageIndex, setPageIndex]         = useState(0);
   const [pageSize, setPageSize]           = useState(25);
   const [sortKey, setSortKey]             = useState(null);
@@ -412,49 +441,77 @@ export default function NovedadesTable({
       )}
 
       {/* Toolbar */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-        {/* Búsqueda global */}
-        <div style={{ position: "relative", flex: "1 1 240px", minWidth: 180 }}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2"
-            style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }}>
-            <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-          </svg>
-          <input
-            type="text" placeholder="Buscar en todas las columnas…"
-            value={globalFilter}
-            onChange={e => { setGlobalFilter(e.target.value); setPageIndex(0); }}
-            className="form-input"
-            style={{ paddingLeft: 30 }}
-          />
-          {globalFilter && (
-            <button onClick={() => { setGlobalFilter(""); setPageIndex(0); }} style={{
-              position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
-              background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)",
-              display: "flex", alignItems: "center", padding: 0,
-            }}>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
-          )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          {/* Búsqueda global */}
+          <div style={{ position: "relative", flex: "1 1 240px", minWidth: 180 }}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" strokeWidth="2"
+              style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)" }}>
+              <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              type="text" placeholder="Buscar en todas las columnas…"
+              value={globalFilter}
+              onChange={e => { setGlobalFilter(e.target.value); setPageIndex(0); }}
+              className="form-input"
+              style={{ paddingLeft: 30 }}
+            />
+            {globalFilter && (
+              <button onClick={() => { setGlobalFilter(""); setPageIndex(0); }} style={{
+                position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)",
+                display: "flex", alignItems: "center", padding: 0,
+              }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            )}
+          </div>
+
+          {/* Botones y contador, agrupados a la derecha */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: "auto", flexWrap: "wrap" }}>
+            {activeFilterCount > 0 && (
+              <button className="btn btn-danger btn-sm"
+                onClick={() => { setGlobalFilter(""); setColumnFilters({}); setPageIndex(0); }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+                Limpiar ({activeFilterCount})
+              </button>
+            )}
+
+            <FiltrosToggle
+              open={filtrosAbiertos}
+              onToggle={() => setFiltrosAbiertos(o => !o)}
+              activeCount={Object.values(columnFilters).filter(v => v?.trim()).length}
+            />
+            <ColumnSelector columns={COLUMN_DEFINITIONS} visible={visibleCols} onChange={toggleColumn} />
+
+            <span style={{ fontSize: 12, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+              {sortedData.length.toLocaleString("es-CO")} / {data.length.toLocaleString("es-CO")} registros
+            </span>
+          </div>
         </div>
 
-        {/* Limpiar filtros */}
-        {activeFilterCount > 0 && (
-          <button className="btn btn-danger btn-sm"
-            onClick={() => { setGlobalFilter(""); setColumnFilters({}); setPageIndex(0); }}>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-            Limpiar ({activeFilterCount})
-          </button>
+        {/* Filtros por columna -- ocultos por defecto, aparecen en esta misma
+            barra (no como fila fija dentro de la tabla) al activar "Filtros",
+            ancladas al lado derecho igual que los botones de arriba. */}
+        {filtrosAbiertos && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-end" }}>
+            {activeColumns.map(col => (
+              <input
+                key={col.key}
+                type="text"
+                placeholder={`Filtrar ${col.label}…`}
+                value={columnFilters[col.key] || ""}
+                onChange={e => updateColumnFilter(col.key, e.target.value)}
+                className="form-input"
+                style={{ width: 160, fontSize: 12, padding: "5px 8px" }}
+              />
+            ))}
+          </div>
         )}
-
-        <ColumnSelector columns={COLUMN_DEFINITIONS} visible={visibleCols} onChange={toggleColumn} />
-
-        <span style={{ fontSize: 12, color: "var(--text-muted)", marginLeft: "auto", whiteSpace: "nowrap" }}>
-          {sortedData.length.toLocaleString("es-CO")} / {data.length.toLocaleString("es-CO")} registros
-        </span>
       </div>
 
       {/* Tabla */}
@@ -480,26 +537,6 @@ export default function NovedadesTable({
                   </th>
                 ))}
                 {actions.length > 0 && <th>Acciones</th>}
-              </tr>
-              
-              {/* Filtros por columna */}
-              <tr style={{ background: "var(--bg-input)" }}>
-                {activeColumns.map(col => (
-                  <th key={col.key} style={{ padding: "4px 8px", border: "none" }}>
-                    <input
-                      type="text" placeholder="Filtrar…"
-                      value={columnFilters[col.key] || ""}
-                      onChange={e => updateColumnFilter(col.key, e.target.value)}
-                      style={{
-                        width: "100%", padding: "4px 8px", fontSize: 11,
-                        background: "var(--bg-surface)", border: "1px solid var(--border)",
-                        borderRadius: "var(--radius-sm)", color: "var(--text-primary)",
-                        boxSizing: "border-box", fontFamily: "inherit",
-                        outline: "none",
-                      }}
-                    />
-                  </th>
-                ))}
               </tr>
             </thead>
             <tbody>

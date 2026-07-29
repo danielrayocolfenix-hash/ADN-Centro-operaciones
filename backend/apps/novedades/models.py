@@ -211,6 +211,25 @@ class Novedades(models.Model):
         blank=True
     )
 
+    dispositivo_dvr = models.ForeignKey(
+        'Vehiculo.DispositivoDVR',
+        on_delete=models.PROTECT,
+        related_name='novedades',
+        null=True,
+        blank=True
+    )
+
+    fecha_ingreso_dvr = models.DateTimeField(
+        null=True,
+        blank=True,
+        editable=False
+    )
+
+    fecha_salida_dvr = models.DateField(
+        null=True,
+        blank=True
+    )
+
     motivo_negativo = models.ForeignKey(
         MotivoNegativo,
         on_delete=models.PROTECT,
