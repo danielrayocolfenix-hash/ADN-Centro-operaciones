@@ -8,7 +8,6 @@ import { API_BASE } from "../../config/api";
 const COLUMN_DEFINITIONS = [
   { key: "id",                     label: "ID",                   type: "number", defaultVisible: false },
   { key: "codigo_novedad",         label: "Código novedad",       type: "text",   defaultVisible: true  },
-  { key: "cliente",                label: "Cliente",              type: "text",   defaultVisible: true  },
   { key: "vehiculo",               label: "Vehículo (placa)",     type: "text",   defaultVisible: true  },
   { key: "numero_interno",         label: "N.º interno",          type: "text",   defaultVisible: true },
   { key: "grupo_flota",            label: "Grupo flota",          type: "text",   defaultVisible: true  },

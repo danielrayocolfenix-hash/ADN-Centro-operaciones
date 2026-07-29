@@ -1,14 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import ExcelJS from "exceljs";
 import {
   ArrowLeft, Truck, User, MapPin, Hash, Paperclip, Upload,
   CheckCircle2, XCircle, Clock, Save,
-  Download, FileDown, SlidersHorizontal, AlertTriangle,
+  Download, FileDown, SlidersHorizontal, AlertTriangle, Plus, X,
 } from "lucide-react";
 import { API_BASE } from "../../config/api";
 import { getCsrfToken } from "../../utils/csrf";
 import { formatFechaHora } from "../../utils/helpers";
 import Toast from "../../components/ui/Toast";
+import { useAuth } from "../../context/AuthContext";
+import { tienePermiso } from "../../utils/permisos";
 
 const ESTADOS_DD = [
   { value: "PENDIENTE_DD", label: "Pendiente DD" },
@@ -17,11 +20,11 @@ const ESTADOS_DD = [
   { value: "TERMINADO", label: "Terminado" },
 ];
 
-function Ficha({ novedad }) {
+function Ficha({ novedad, informe }) {
   const campos = [
     { icon: Hash, label: "Código", value: novedad.codigo_novedad },
     { icon: User, label: "Cliente", value: novedad.cliente },
-    
+    { icon: Paperclip, label: "Tipo informe", value: informe?.nombre || novedad.informe?.nombre },
     { icon: Truck, label: "Vehículo", value: `${novedad.vehiculo} · ${novedad.numero_interno}` },
     { icon: User, label: "Conductor", value: novedad.conductor },
     { icon: MapPin, label: "Ruta", value: novedad.ruta },
@@ -51,7 +54,7 @@ function Ficha({ novedad }) {
   );
 }
 
-function Stepper({ estado, onChange }) {
+function Stepper({ estado, onChange, disabled }) {
   const activeIndex = ESTADOS_DD.findIndex((e) => e.value === estado);
   return (
     <div className="card">
@@ -63,11 +66,12 @@ function Stepper({ estado, onChange }) {
           return (
             <button
               key={paso.value}
-              onClick={() => onChange(paso.value)}
+              onClick={() => !disabled && onChange(paso.value)}
+              disabled={disabled}
               style={{
                 flex: 1, position: "relative", padding: "18px 4px 0", textAlign: "left",
-                background: "none", border: "none", cursor: "pointer",
-                fontFamily: "inherit",
+                background: "none", border: "none", cursor: disabled ? "default" : "pointer",
+                fontFamily: "inherit", opacity: disabled ? 0.75 : 1,
               }}
             >
               <span style={{
@@ -97,9 +101,123 @@ function Stepper({ estado, onChange }) {
   );
 }
 
+// Select de motivo (Positiva/Negativa) que además permite agregar una
+// opción nueva ahí mismo si el catálogo no cubre el caso -- abierto a
+// cualquier usuario que pueda editar la revisión, sin necesitar ningún
+// permiso de administración (el backend lo respalda: crear un motivo nuevo
+// desde acá no requiere administracion.gestionar_novedades).
+function MotivoCombobox({ value, options, onSeleccionar, onCrearNuevo, placeholder, emptyLabel, disabled }) {
+  const [open, setOpen] = useState(false);
+  const [texto, setTexto] = useState("");
+  const [creando, setCreando] = useState(false);
+  const ref = useRef(null);
+
+  const seleccionado = options.find((o) => o.value === value);
+
+  useEffect(() => {
+    if (!open) setTexto(seleccionado ? seleccionado.label : "");
+  }, [value, options]); // eslint-disable-line
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const textoNorm = texto.trim().toLowerCase();
+  const filtradas = textoNorm ? options.filter((o) => o.label.toLowerCase().includes(textoNorm)) : options;
+  const coincideExacto = options.some((o) => o.label.toLowerCase() === textoNorm);
+  const puedeCrear = !!textoNorm && !coincideExacto;
+
+  const elegir = (id, label) => {
+    onSeleccionar(id);
+    setTexto(label);
+    setOpen(false);
+  };
+
+  const crear = async () => {
+    const nombre = texto.trim();
+    if (!nombre || creando) return;
+    setCreando(true);
+    try {
+      const nuevo = await onCrearNuevo(nombre);
+      if (nuevo) elegir(nuevo.value, nuevo.label);
+    } finally {
+      setCreando(false);
+    }
+  };
+
+  return (
+    <div ref={ref} style={{ position: "relative" }}>
+      <input
+        className="form-input"
+        placeholder={placeholder}
+        value={texto}
+        disabled={disabled}
+        onChange={(e) => { setTexto(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => { setOpen(false); setTexto(seleccionado ? seleccionado.label : ""); }}
+        autoComplete="off"
+      />
+      {open && !disabled && (emptyLabel || filtradas.length > 0 || puedeCrear) && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 50,
+          background: "var(--bg-card)", border: "1px solid var(--border)",
+          borderRadius: "var(--radius-md, 10px)", padding: "6px 0", maxHeight: 220, overflowY: "auto",
+          boxShadow: "0 12px 28px -8px rgba(0,0,0,0.35)",
+        }}>
+          {emptyLabel && (
+            <button type="button" onMouseDown={(e) => e.preventDefault()} onClick={() => elegir(null, "")} style={{
+              display: "block", width: "100%", textAlign: "left", padding: "7px 12px",
+              background: "none", border: "none", cursor: "pointer", fontFamily: "inherit",
+              fontSize: 13, color: "var(--text-muted)", fontStyle: "italic",
+            }}>
+              {emptyLabel}
+            </button>
+          )}
+          {filtradas.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => elegir(o.value, o.label)}
+              style={{
+                display: "block", width: "100%", textAlign: "left", padding: "7px 12px",
+                background: "none", border: "none", cursor: "pointer", fontFamily: "inherit",
+                fontSize: 13, color: "var(--text-primary)",
+              }}
+            >
+              {o.label}
+            </button>
+          ))}
+          {puedeCrear && (
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={crear}
+              disabled={creando}
+              style={{
+                display: "flex", alignItems: "center", gap: 6, width: "100%", textAlign: "left",
+                padding: "7px 12px", background: "none", border: "none", cursor: creando ? "default" : "pointer",
+                fontFamily: "inherit", fontSize: 12.5, color: "var(--accent-primary)", fontWeight: 600,
+                borderTop: (filtradas.length > 0 || emptyLabel) ? "1px solid var(--border)" : "none",
+              }}
+            >
+              <Plus size={12} /> {creando ? "Agregando..." : `Agregar "${texto.trim()}" como motivo nuevo`}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DecisionRevision({
   respuesta, motivoId, detalle, motivos, onRespuesta, onMotivo, onDetalle,
   motivosPositivos, motivoPositivoId, detallePositivo, onMotivoPositivo, onDetallePositivo,
+  onCrearMotivo, onCrearMotivoPositivo,
+  disabled,
 }) {
   return (
     <div className="card">
@@ -109,6 +227,7 @@ function DecisionRevision({
           className={`btn ${respuesta === "Positiva" ? "btn-success" : "btn-secondary"}`}
           style={{ flex: 1, justifyContent: "center" }}
           onClick={() => onRespuesta("Positiva")}
+          disabled={disabled}
         >
           <CheckCircle2 size={15} /> Positiva
         </button>
@@ -116,6 +235,7 @@ function DecisionRevision({
           className={`btn ${respuesta === "Negativa" ? "btn-danger" : "btn-secondary"}`}
           style={{ flex: 1, justifyContent: "center" }}
           onClick={() => onRespuesta("Negativa")}
+          disabled={disabled}
         >
           <XCircle size={15} /> Negativa
         </button>
@@ -125,16 +245,15 @@ function DecisionRevision({
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">Motivo</label>
-            <select
-              className="form-select"
-              value={motivoPositivoId || ""}
-              onChange={(e) => onMotivoPositivo(e.target.value ? Number(e.target.value) : null)}
-            >
-              <option value="">Se encuentran registros de grabación (caso estándar)</option>
-              {motivosPositivos.map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </select>
+            <MotivoCombobox
+              value={motivoPositivoId}
+              options={motivosPositivos}
+              onSeleccionar={onMotivoPositivo}
+              onCrearNuevo={onCrearMotivoPositivo}
+              placeholder="Se encuentran registros de grabación (caso estándar)"
+              emptyLabel="Se encuentran registros de grabación (caso estándar)"
+              disabled={disabled}
+            />
           </div>
           {!!motivoPositivoId && (
             <div className="form-group" style={{ marginBottom: 0 }}>
@@ -145,6 +264,7 @@ function DecisionRevision({
                 placeholder="Ej. La regrabación inició a las 14:32, se alcanzó a extraer el clip de las 13:00 a 13:15 antes de que se sobrescribiera..."
                 value={detallePositivo}
                 onChange={(e) => onDetallePositivo(e.target.value)}
+                disabled={disabled}
               />
             </div>
           )}
@@ -155,12 +275,14 @@ function DecisionRevision({
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">Motivo</label>
-            <select className="form-select" value={motivoId || ""} onChange={(e) => onMotivo(e.target.value ? Number(e.target.value) : null)}>
-              <option value="">Seleccione un motivo...</option>
-              {motivos.map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </select>
+            <MotivoCombobox
+              value={motivoId}
+              options={motivos}
+              onSeleccionar={onMotivo}
+              onCrearNuevo={onCrearMotivo}
+              placeholder="Seleccione o escriba un motivo..."
+              disabled={disabled}
+            />
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">Detalle del caso</label>
@@ -170,6 +292,7 @@ function DecisionRevision({
               placeholder="Ej. Se intentó encender con batería externa sin éxito..."
               value={detalle}
               onChange={(e) => onDetalle(e.target.value)}
+              disabled={disabled}
             />
           </div>
         </div>
@@ -223,30 +346,110 @@ function nivelEsperaDD(deltaMs) {
   return "normal";
 }
 
-function exportarTrazabilidadCSV(eventosConDelta, columnasVisibles, codigoNovedad) {
+// Ancho de columna / tipo de dato por clave -- ExcelJS necesita esto
+// aparte, ya que COLUMNAS_EXPORT solo define la etiqueta visible en el
+// selector de columnas (compartido con la vista en pantalla).
+const COLUMNA_XLSX = {
+  fecha: { width: 13, tipo: "fecha" },
+  hora: { width: 11, tipo: "texto" },
+  campo: { width: 16, tipo: "texto" },
+  valor_anterior: { width: 24, tipo: "texto" },
+  valor_nuevo: { width: 24, tipo: "texto" },
+  usuario: { width: 22, tipo: "texto" },
+  duracion: { width: 32, tipo: "texto" },
+};
+
+const NIVEL_FILL_XLSX = {
+  alerta: "FFFEE2E2",
+  atencion: "FFFEF3C7",
+};
+const NIVEL_FONT_XLSX = {
+  alerta: "FF991B1B",
+  atencion: "FF92400E",
+};
+
+async function exportarTrazabilidadXLSX(eventosConDelta, columnasVisibles, novedad) {
   const columnas = COLUMNAS_EXPORT.filter((c) => columnasVisibles[c.key]);
-  const encabezado = columnas.map((c) => c.label).join(",");
-  const filas = eventosConDelta.map((ev) => {
+  const codigoNovedad = novedad.codigo_novedad || "novedad";
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Colfenix GPS";
+  workbook.created = new Date();
+
+  const hoja = workbook.addWorksheet("Trazabilidad", {
+    views: [{ state: "frozen", ySplit: 5 }],
+  });
+  hoja.columns = columnas.map((c) => ({ key: c.key, width: COLUMNA_XLSX[c.key]?.width || 18 }));
+
+  // --- Bloque de encabezado (título + metadata de la novedad) ---
+  hoja.mergeCells(1, 1, 1, columnas.length);
+  const celdaTitulo = hoja.getCell(1, 1);
+  celdaTitulo.value = `Trazabilidad — ${codigoNovedad}`;
+  celdaTitulo.font = { bold: true, size: 14, color: { argb: "FF0F172A" } };
+
+  hoja.mergeCells(2, 1, 2, columnas.length);
+  const celdaMeta = hoja.getCell(2, 1);
+  celdaMeta.value = `Cliente: ${novedad.cliente || "—"}   ·   Vehículo: ${novedad.vehiculo || "—"}   ·   Analista: ${novedad.analista || "—"}`;
+  celdaMeta.font = { size: 10.5, color: { argb: "FF475569" } };
+
+  hoja.mergeCells(3, 1, 3, columnas.length);
+  const celdaExportado = hoja.getCell(3, 1);
+  celdaExportado.value = `Exportado: ${new Date().toLocaleString("es-CO")}`;
+  celdaExportado.font = { size: 9.5, italic: true, color: { argb: "FF94A3B8" } };
+
+  // --- Encabezado de la tabla ---
+  const filaEncabezado = hoja.getRow(5);
+  columnas.forEach((c, i) => {
+    const celda = filaEncabezado.getCell(i + 1);
+    celda.value = c.label;
+    celda.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    celda.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F8CFF" } };
+    celda.alignment = { vertical: "middle", horizontal: "left" };
+    celda.border = { bottom: { style: "thin", color: { argb: "FF2563EB" } } };
+  });
+  filaEncabezado.height = 20;
+  hoja.autoFilter = { from: { row: 5, column: 1 }, to: { row: 5, column: columnas.length } };
+
+  // --- Filas de datos ---
+  eventosConDelta.forEach((ev) => {
     const fechaObj = new Date(ev.creado);
-    const fila = {
-      fecha: fechaObj.toLocaleDateString("es-CO"),
+    const duracionTexto = ev.deltaMs != null
+      ? `${ev.esEsperaDD ? "Espera DVR: " : "+"}${formatDuracion(ev.deltaMs)}`
+      : "—";
+    const valores = {
+      fecha: fechaObj,
       hora: fechaObj.toLocaleTimeString("es-CO", { hour12: false }),
       campo: TRAZA_LABELS[ev.campo] || ev.campo,
       valor_anterior: ev.valor_anterior || "—",
       valor_nuevo: ev.valor_nuevo || "—",
       usuario: ev.usuario || "Sistema",
-      duracion: ev.deltaMs != null ? formatDuracion(ev.deltaMs) : "—",
+      duracion: duracionTexto,
     };
-    return columnas.map((c) => `"${String(fila[c.key]).replace(/"/g, '""')}"`).join(",");
+
+    const fila = hoja.addRow(columnas.map((c) => valores[c.key]));
+    fila.eachCell((celda, colNumero) => {
+      const clave = columnas[colNumero - 1].key;
+      celda.border = {
+        top: { style: "hair", color: { argb: "FFE2E8F0" } },
+        bottom: { style: "hair", color: { argb: "FFE2E8F0" } },
+      };
+      if (clave === "fecha") celda.numFmt = "dd/mm/yyyy";
+      // Resalta la fila igual que el punto de color en la línea de tiempo en
+      // pantalla: alerta (rojo) / atención (ámbar) cuando un tramo tardó más
+      // de lo normal, para que salte a la vista también en Excel.
+      if (ev.nivel && NIVEL_FILL_XLSX[ev.nivel]) {
+        celda.fill = { type: "pattern", pattern: "solid", fgColor: { argb: NIVEL_FILL_XLSX[ev.nivel] } };
+        celda.font = { ...(celda.font || {}), color: { argb: NIVEL_FONT_XLSX[ev.nivel] } };
+      }
+    });
   });
 
-  const csv = [encabezado, ...filas].join("\r\n");
-  // BOM al inicio para que Excel detecte UTF-8 y no rompa las tildes/ñ.
-  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   const url = URL.createObjectURL(blob);
   const enlace = document.createElement("a");
   enlace.href = url;
-  enlace.download = `trazabilidad_${codigoNovedad || "novedad"}.csv`;
+  enlace.download = `trazabilidad_${codigoNovedad}.xlsx`;
   document.body.appendChild(enlace);
   enlace.click();
   document.body.removeChild(enlace);
@@ -308,10 +511,11 @@ const NIVEL_BG = {
   normal: "var(--bg-surface)",
 };
 
-function Trazabilidad({ novedad, eventos }) {
+function Trazabilidad({ novedad, eventos, puedeExportar }) {
   const [columnasVisibles, setColumnasVisibles] = useState(() =>
     Object.fromEntries(COLUMNAS_EXPORT.map((c) => [c.key, true]))
   );
+  const [exportando, setExportando] = useState(false);
 
   const toggleColumna = (key) => setColumnasVisibles((prev) => ({ ...prev, [key]: !prev[key] }));
 
@@ -342,21 +546,35 @@ function Trazabilidad({ novedad, eventos }) {
     return { ...ev, deltaMs, esEsperaDD, nivel: esEsperaDD ? nivelEsperaDD(deltaMs) : nivelDemora(deltaMs) };
   });
 
+  const exportar = async () => {
+    setExportando(true);
+    try {
+      await exportarTrazabilidadXLSX(eventosConDelta, columnasVisibles, novedad);
+    } finally {
+      setExportando(false);
+    }
+  };
+
   return (
     <div className="card">
       <div className="card-header">
         <span className="card-title"><Clock size={15} /> Trazabilidad</span>
         <div style={{ display: "flex", gap: 6 }}>
-          <SelectorColumnasExport visibles={columnasVisibles} onToggle={toggleColumna} />
-          <button
-            className="btn btn-sm btn-secondary"
-            onClick={() => exportarTrazabilidadCSV(eventosConDelta, columnasVisibles, novedad.codigo_novedad)}
-          >
-            <Download size={12} /> Exportar CSV
-          </button>
-          <button className="btn btn-sm btn-secondary" title="Próximamente">
-            <FileDown size={12} /> Exportar PDF
-          </button>
+          {puedeExportar && (
+            <>
+              <SelectorColumnasExport visibles={columnasVisibles} onToggle={toggleColumna} />
+              <button
+                className="btn btn-sm btn-secondary"
+                onClick={exportar}
+                disabled={exportando}
+              >
+                <Download size={12} /> {exportando ? "Generando..." : "Exportar Excel"}
+              </button>
+              <button className="btn btn-sm btn-secondary" title="Próximamente">
+                <FileDown size={12} /> Exportar PDF
+              </button>
+            </>
+          )}
         </div>
       </div>
       <div style={{ position: "relative", paddingLeft: 22 }}>
@@ -510,36 +728,66 @@ function PanelSLA({ novedad }) {
   );
 }
 
-function Evidencia({ evidencias, onUpload, subiendo }) {
+function Evidencia({ evidencias, onUpload, subiendo, puedeSubir, onEliminar }) {
+  const [eliminandoId, setEliminandoId] = useState(null);
+
+  const eliminar = async (ev) => {
+    if (!window.confirm("¿Quitar esta imagen de evidencia?")) return;
+    setEliminandoId(ev.id);
+    try {
+      await onEliminar(ev.id);
+    } finally {
+      setEliminandoId(null);
+    }
+  };
+
   return (
     <div className="card">
       <div className="card-header"><span className="card-title"><Paperclip size={15} /> Evidencia adjunta</span></div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 10, marginBottom: 14 }}>
         {evidencias.map((ev) => (
-          <a
+          <div
             key={ev.id}
-            href={`${API_BASE}${ev.archivo}`}
-            target="_blank"
-            rel="noreferrer"
             style={{
-              display: "block", aspectRatio: "4 / 3", borderRadius: "var(--radius-sm)",
+              aspectRatio: "4 / 3", borderRadius: "var(--radius-sm)",
               border: "1px solid var(--border)", overflow: "hidden", position: "relative",
               background: "var(--bg-surface)",
             }}
           >
-            <img src={`${API_BASE}${ev.archivo}`} alt={ev.descripcion || "Evidencia"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-          </a>
+            <a href={`${API_BASE}${ev.archivo}`} target="_blank" rel="noreferrer" style={{ display: "block", width: "100%", height: "100%" }}>
+              <img src={`${API_BASE}${ev.archivo}`} alt={ev.descripcion || "Evidencia"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            </a>
+            {puedeSubir && (
+              <button
+                type="button"
+                title="Quitar imagen"
+                onClick={() => eliminar(ev)}
+                disabled={eliminandoId === ev.id}
+                style={{
+                  position: "absolute", top: 4, right: 4, width: 22, height: 22, borderRadius: "50%",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  background: "rgba(15, 23, 42, 0.72)", color: "#fff", border: "none",
+                  cursor: eliminandoId === ev.id ? "default" : "pointer",
+                  opacity: eliminandoId === ev.id ? 0.6 : 1,
+                }}
+              >
+                <X size={13} />
+              </button>
+            )}
+          </div>
         ))}
-        <label style={{
-          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6,
-          aspectRatio: "4 / 3", borderRadius: "var(--radius-sm)", border: "1px dashed var(--border)",
-          color: "var(--text-muted)", fontSize: 11, cursor: subiendo ? "default" : "pointer",
-        }}>
-          <Upload size={16} />
-          {subiendo ? "Subiendo..." : "Agregar"}
-          <input type="file" accept="image/*" style={{ display: "none" }} disabled={subiendo}
-            onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])} />
-        </label>
+        {puedeSubir && (
+          <label style={{
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6,
+            aspectRatio: "4 / 3", borderRadius: "var(--radius-sm)", border: "1px dashed var(--border)",
+            color: "var(--text-muted)", fontSize: 11, cursor: subiendo ? "default" : "pointer",
+          }}>
+            <Upload size={16} />
+            {subiendo ? "Subiendo..." : "Agregar"}
+            <input type="file" accept="image/*" style={{ display: "none" }} disabled={subiendo}
+              onChange={(e) => e.target.files?.[0] && onUpload(e.target.files[0])} />
+          </label>
+        )}
       </div>
     </div>
   );
@@ -548,6 +796,10 @@ function Evidencia({ evidencias, onUpload, subiendo }) {
 export default function NovedadDetallePage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const puedeEditar = tienePermiso(user, "novedades.editar");
+  const puedeSubirEvidencia = tienePermiso(user, "novedades.subir_evidencia");
+  const puedeExportar = tienePermiso(user, "novedades.exportar");
 
   const [novedad, setNovedad] = useState(null);
   const [eventos, setEventos] = useState([]);
@@ -684,6 +936,61 @@ export default function NovedadDetallePage() {
     }
   };
 
+  const handleEliminarEvidencia = async (evidenciaId) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/novedades/evidencia/${evidenciaId}/eliminar/`, {
+        method: "DELETE",
+        headers: { "X-CSRFToken": getCsrfToken() },
+        credentials: "include",
+      });
+      const resultado = await res.json();
+      if (!resultado.success) throw new Error(resultado.mensaje || "No se pudo quitar la evidencia");
+      setNovedad((prev) => prev && ({ ...prev, evidencias: prev.evidencias.filter((e) => e.id !== evidenciaId) }));
+    } catch (err) {
+      setToast({ msg: `Error: ${err.message}`, type: "error" });
+    }
+  };
+
+  // Agregar un motivo nuevo desde el propio combobox de "Resultado de la
+  // revisión" -- abierto a cualquier usuario que pueda editar la revisión,
+  // sin permiso de administración (el backend ya no exige
+  // administracion.gestionar_novedades para este endpoint puntual).
+  const crearMotivo = async (nombre) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/motivos-negativa/crear/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": getCsrfToken() },
+        credentials: "include",
+        body: JSON.stringify({ nombre }),
+      });
+      const resultado = await res.json();
+      if (!resultado.success) throw new Error(resultado.mensaje || "No se pudo agregar el motivo");
+      setMotivos((ms) => (ms.some((m) => m.value === resultado.motivo.value) ? ms : [...ms, resultado.motivo]));
+      return resultado.motivo;
+    } catch (err) {
+      setToast({ msg: `Error: ${err.message}`, type: "error" });
+      return null;
+    }
+  };
+
+  const crearMotivoPositivo = async (nombre) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/motivos-positiva/crear/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": getCsrfToken() },
+        credentials: "include",
+        body: JSON.stringify({ nombre }),
+      });
+      const resultado = await res.json();
+      if (!resultado.success) throw new Error(resultado.mensaje || "No se pudo agregar el motivo");
+      setMotivosPositivos((ms) => (ms.some((m) => m.value === resultado.motivo.value) ? ms : [...ms, resultado.motivo]));
+      return resultado.motivo;
+    } catch (err) {
+      setToast({ msg: `Error: ${err.message}`, type: "error" });
+      return null;
+    }
+  };
+
   if (loading) {
     return <div style={{ padding: 24, color: "var(--text-muted)" }}>Cargando novedad…</div>;
   }
@@ -706,15 +1013,17 @@ export default function NovedadDetallePage() {
           <div className="hero-eyebrow">Revisión de DVR</div>
           <h2 className="hero-title">{novedad.codigo_novedad}</h2>
         </div>
-        <div className="hero-actions">
-          <button className="btn btn-primary" onClick={handleGuardar} disabled={saving}>
-            <Save size={15} /> {saving ? "Guardando..." : "Guardar cambios"}
-          </button>
-        </div>
+        {puedeEditar && (
+          <div className="hero-actions">
+            <button className="btn btn-primary" onClick={handleGuardar} disabled={saving}>
+              <Save size={15} /> {saving ? "Guardando..." : "Guardar cambios"}
+            </button>
+          </div>
+        )}
       </div>
 
       <Ficha novedad={novedad} />
-      <Stepper estado={estadoDD} onChange={setEstadoDD} />
+      <Stepper estado={estadoDD} onChange={setEstadoDD} disabled={!puedeEditar} />
 
       <div className="grid-2" style={{ alignItems: "start" }}>
         <PanelEsperaDD novedad={novedad} />
@@ -735,11 +1044,20 @@ export default function NovedadDetallePage() {
           detallePositivo={detallePositivo}
           onMotivoPositivo={setMotivoPositivoId}
           onDetallePositivo={setDetallePositivo}
+          onCrearMotivo={crearMotivo}
+          onCrearMotivoPositivo={crearMotivoPositivo}
+          disabled={!puedeEditar}
         />
-        <Trazabilidad novedad={novedad} eventos={eventos} />
+        <Trazabilidad novedad={novedad} eventos={eventos} puedeExportar={puedeExportar} />
       </div>
 
-      <Evidencia evidencias={novedad.evidencias || []} onUpload={handleUpload} subiendo={subiendoEvidencia} />
+      <Evidencia
+        evidencias={novedad.evidencias || []}
+        onUpload={handleUpload}
+        subiendo={subiendoEvidencia}
+        puedeSubir={puedeSubirEvidencia}
+        onEliminar={handleEliminarEvidencia}
+      />
 
       {toast && <Toast message={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
     </div>

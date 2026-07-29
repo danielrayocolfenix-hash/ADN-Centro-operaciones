@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Bell, Clock, Sun, Moon, Flame, X } from "lucide-react";
+import { Bell, Clock, Sun, Moon, Flame, X, ChevronDown, Settings, LogOut } from "lucide-react";
+import { useSiteConfig } from "../../context/SiteConfigContext";
 
 const pageTitles = {
   dashboard: { title: "Dashboard Operativo", sub: "Resumen general del sistema de monitoreo" },
@@ -31,6 +32,13 @@ const alertasMock = [
   { id: 2, severidad: "media", texto: "Cámara sin imagen — vehículo MNZ-789",           hace: "hace 22 min" },
   { id: 3, severidad: "baja",  texto: "Mantenimiento preventivo programado — VEH-006",  hace: "hace 1 h" },
 ];
+
+function inicialesDe(nombre) {
+  if (!nombre) return "??";
+  const partes = nombre.trim().split(/\s+/);
+  const primeras = partes.slice(0, 2).map((p) => p[0]?.toUpperCase() || "");
+  return primeras.join("") || "??";
+}
 
 function ThemeSelect({ theme, onChange }) {
   const current = THEMES.find(t => t.key === theme) || THEMES[0];
@@ -77,7 +85,7 @@ function AlertDropdown({ alertas, onClose }) {
         background: "var(--bg-card)", border: "1px solid var(--border)",
         borderRadius: "var(--radius-md, 10px)",
         boxShadow: "0 12px 28px -8px rgba(0,0,0,0.35)",
-        zIndex: 50,
+        zIndex: 60,
       }}
     >
       <div style={{
@@ -119,11 +127,89 @@ function AlertDropdown({ alertas, onClose }) {
   );
 }
 
-export default function Topbar({ page, alertCount, alertas = alertasMock }) {
+// Reemplaza lo que antes era el bloque fijo de usuario + botón de cerrar
+// sesión al fondo del sidebar: ahora vive acá, agrupado en un único menú
+// desplegable junto con el acceso a Configuración y Notificaciones.
+function UserMenu({ user, alertCount, onNavigate, onLogout, onAbrirAlertas }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handleClick = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    const handleEscape = (e) => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, [open]);
+
+  return (
+    <div style={{ position: "relative" }} ref={ref}>
+      <button
+        className="user-menu-trigger"
+        onClick={() => setOpen(o => !o)}
+        aria-label="Menú de usuario"
+        aria-expanded={open}
+      >
+        <span className="user-menu-avatar">{inicialesDe(user?.nombre)}</span>
+        <span className="user-menu-name">{user?.nombre || "—"}</span>
+        <ChevronDown size={14} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+      </button>
+
+      {open && (
+        <div className="user-menu-dropdown">
+          <div className="user-menu-header">
+            <span className="user-menu-avatar" style={{ width: 38, height: 38, fontSize: 14 }}>
+              {inicialesDe(user?.nombre)}
+            </span>
+            <div style={{ minWidth: 0 }}>
+              <strong style={{ display: "block", fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {user?.nombre || "—"}
+              </strong>
+              <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{user?.rol || "Sin rol asignado"}</span>
+            </div>
+          </div>
+
+          <div className="user-menu-divider" />
+
+          {user?.is_staff && (
+            <button
+              className="user-menu-item"
+              onClick={() => { setOpen(false); onNavigate("administracion/sitio"); }}
+            >
+              <Settings size={15} /> Configuración del sitio
+            </button>
+          )}
+          <button
+            className="user-menu-item"
+            onClick={() => { setOpen(false); onAbrirAlertas(); }}
+          >
+            <Bell size={15} /> Notificaciones
+            {alertCount > 0 && <span className="user-menu-item-badge">{alertCount > 9 ? "9+" : alertCount}</span>}
+          </button>
+
+          <div className="user-menu-divider" />
+
+          <button className="user-menu-item user-menu-item-danger" onClick={() => { setOpen(false); onLogout?.(); }}>
+            <LogOut size={15} /> Cerrar sesión
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function Topbar({ page, alertCount, alertas = alertasMock, user, onNavigate, onLogout }) {
+  const { config } = useSiteConfig();
   const [now, setNow] = useState(new Date());
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "dark");
   const [alertsOpen, setAlertsOpen] = useState(false);
-  const alertsRef = useRef(null);
+  const actionsRef = useRef(null);
 
   const info = pageTitles[page] || pageTitles.dashboard;
   const hora = now.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" });
@@ -142,11 +228,13 @@ export default function Topbar({ page, alertCount, alertas = alertasMock }) {
     localStorage.setItem("theme", theme);
   }, [theme]);
 
-  // Cierra el dropdown de alertas al hacer clic afuera.
+  // Cierra el dropdown de alertas al hacer clic afuera de toda la fila de
+  // acciones (incluye el ícono de campana y el menú de usuario, ya que
+  // "Notificaciones" ahí adentro también puede abrirlo).
   useEffect(() => {
     if (!alertsOpen) return;
     const handleClick = (e) => {
-      if (alertsRef.current && !alertsRef.current.contains(e.target)) {
+      if (actionsRef.current && !actionsRef.current.contains(e.target)) {
         setAlertsOpen(false);
       }
     };
@@ -161,17 +249,21 @@ export default function Topbar({ page, alertCount, alertas = alertasMock }) {
         <div className="topbar-subtitle">{info.sub}</div>
       </div>
 
-      <div className="topbar-actions" style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)", padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 999, background: "rgba(255,255,255,0.03)" }}>
-          <Clock size={13} />
-          <span>{fecha} · {hora}</span>
-        </div>
+      <div className="topbar-actions" ref={actionsRef}>
+        {config.mostrar_reloj_topbar && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)", padding: "7px 10px", border: "1px solid var(--border)", borderRadius: 999, background: "rgba(255,255,255,0.03)" }}>
+            <Clock size={13} />
+            <span>{fecha} · {hora}</span>
+          </div>
+        )}
 
-        <div style={{ width: 1, height: 18, background: "var(--border)" }} />
+        {config.mostrar_reloj_topbar && (config.mostrar_tema_topbar || config.mostrar_alertas_topbar || config.mostrar_estado_sistema_topbar) && (
+          <div style={{ width: 1, height: 18, background: "var(--border)" }} />
+        )}
 
-        <ThemeSelect theme={theme} onChange={setTheme} />
+        {config.mostrar_tema_topbar && <ThemeSelect theme={theme} onChange={setTheme} />}
 
-        <div style={{ position: "relative" }} ref={alertsRef}>
+        {config.mostrar_alertas_topbar && (
           <button
             className="btn-icon"
             onClick={() => setAlertsOpen(o => !o)}
@@ -192,18 +284,28 @@ export default function Topbar({ page, alertCount, alertas = alertasMock }) {
               </span>
             )}
           </button>
+        )}
 
-          {alertsOpen && (
-            <AlertDropdown alertas={alertas} onClose={() => setAlertsOpen(false)} />
-          )}
-        </div>
+        {config.mostrar_estado_sistema_topbar && (
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--accent-success)" }}>
+            <span className="pulse-dot" />
+            Sistema activo
+          </div>
+        )}
 
         <div style={{ width: 1, height: 18, background: "var(--border)" }} />
 
-        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--accent-success)" }}>
-          <span className="pulse-dot" />
-          Sistema activo
-        </div>
+        <UserMenu
+          user={user}
+          alertCount={alertCount}
+          onNavigate={onNavigate}
+          onLogout={onLogout}
+          onAbrirAlertas={() => setAlertsOpen(true)}
+        />
+
+        {alertsOpen && (
+          <AlertDropdown alertas={alertas} onClose={() => setAlertsOpen(false)} />
+        )}
       </div>
     </div>
   );

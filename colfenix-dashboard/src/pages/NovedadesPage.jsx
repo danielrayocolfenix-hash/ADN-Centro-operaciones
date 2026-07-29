@@ -11,6 +11,7 @@ import NovedadesTable from "../components/DynamicTable/DynamicTable";
 import { getCsrfToken } from "../utils/csrf";
 import { API_BASE as API_HOST } from "../config/api";
 import { useAuth } from "../context/AuthContext";
+import { tienePermiso } from "../utils/permisos";
 
 const API_BASE = `${API_HOST}/api`;
 
@@ -43,7 +44,7 @@ function ClienteGrupo({ cliente, items, actions, defaultOpen = true }) {
   );
 }
 
-function ModalNovedad({ novedad, onClose, onSave, onGenerarInforme }) {
+function ModalNovedad({ novedad, onClose, onSave, onGenerarInforme, puedeGenerarInforme }) {
   const isEdit = !!novedad?.id;
 
   return (
@@ -57,7 +58,7 @@ function ModalNovedad({ novedad, onClose, onSave, onGenerarInforme }) {
           <button className="btn btn-secondary" onClick={onClose}>
             Cancelar
           </button>
-          {isEdit && !novedad.tiene_informe && (
+          {isEdit && !novedad.tiene_informe && puedeGenerarInforme && (
             <button className="btn btn-success" onClick={() => onGenerarInforme(novedad)}>
               <FileText size={14} /> Generar informe
             </button>
@@ -172,16 +173,18 @@ export default function NovedadesPage({ onGenerarInforme }) {
   }, []);
 
   // El listado de analistas asignables solo lo necesita (y solo puede
-  // pedirlo) un usuario is_staff — se evita el fetch para el resto.
+  // pedirlo) quien tiene el permiso de asignar analista — se evita el fetch
+  // para el resto.
+  const puedeAsignarAnalista = tienePermiso(user, "novedades.asignar_analista");
   useEffect(() => {
-    if (!user?.is_staff) return;
+    if (!puedeAsignarAnalista) return;
     let cancelado = false;
     fetch(`${API_BASE}/usuarios/analistas/`, { credentials: "include" })
       .then((r) => r.json())
       .then((data) => { if (!cancelado) setAnalistas(data); })
       .catch(() => {});
     return () => { cancelado = true; };
-  }, [user?.is_staff]);
+  }, [puedeAsignarAnalista]);
 
   // Filtro usando los nombres de campo reales que devuelve novedades_view
   // (codigo_novedad, tipo_informe, ruta, estado_novedad, nivel_prioridad),
@@ -324,6 +327,7 @@ export default function NovedadesPage({ onGenerarInforme }) {
       variant: "primary",
       onClick: (row) => onGenerarInforme(row),
       show: (row) => row.estado_novedad !== "Pendiente_por_responder",
+      permiso: "novedades.generar_informe",
     },
     {
       key: "editar",
@@ -335,8 +339,9 @@ export default function NovedadesPage({ onGenerarInforme }) {
         setSelected(row);
         setModal("editar");
       },
+      permiso: "novedades.editar",
     },
-    ...(user?.is_staff ? [{
+    {
       key: "asignar",
       label: "Asignar analista",
       tooltip: "Reasignar el analista responsable de esta novedad",
@@ -346,7 +351,8 @@ export default function NovedadesPage({ onGenerarInforme }) {
         setSelected(row);
         setModal("asignar");
       },
-    }] : []),
+      permiso: "novedades.asignar_analista",
+    },
     {
       key: "eliminar",
       label: "Eliminar",
@@ -362,8 +368,9 @@ export default function NovedadesPage({ onGenerarInforme }) {
           handleEliminar(row.id);
         }
       },
+      permiso: "novedades.eliminar",
     },
-  ];
+  ].filter((a) => !a.permiso || tienePermiso(user, a.permiso));
 
   return (
     <div className="page-shell">
@@ -373,11 +380,13 @@ export default function NovedadesPage({ onGenerarInforme }) {
           <h2 className="hero-title">Gestiona novedades, evidencia y decisiones desde un único espacio</h2>
           <p className="hero-text">La vista prioriza los casos críticos, el estado de revisión y la posibilidad de avanzar directamente a la generación del informe.</p>
         </div>
-        <div className="hero-actions">
-          <button className="btn btn-primary" onClick={() => { setSelected(null); setModal("nuevo"); }}>
-            <Plus size={15} /> Registrar novedad
-          </button>
-        </div>
+        {tienePermiso(user, "novedades.crear") && (
+          <div className="hero-actions">
+            <button className="btn btn-primary" onClick={() => { setSelected(null); setModal("nuevo"); }}>
+              <Plus size={15} /> Registrar novedad
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="hero-metrics">
@@ -405,7 +414,13 @@ export default function NovedadesPage({ onGenerarInforme }) {
       ))}
 
       {(modal === "nuevo" || modal === "editar") && (
-        <ModalNovedad novedad={modal === "editar" ? selected : null} onClose={() => setModal(null)} onSave={handleSave} onGenerarInforme={handleGenerarInforme} />
+        <ModalNovedad
+          novedad={modal === "editar" ? selected : null}
+          onClose={() => setModal(null)}
+          onSave={handleSave}
+          onGenerarInforme={handleGenerarInforme}
+          puedeGenerarInforme={tienePermiso(user, "novedades.generar_informe")}
+        />
       )}
       {modal === "asignar" && selected && (
         <AsignarAnalistaDrawer

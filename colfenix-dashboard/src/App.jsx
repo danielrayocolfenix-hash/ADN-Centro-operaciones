@@ -16,11 +16,16 @@ import InformeBuilderPage from "./pages/InformeBuilder/InformeBuilderPage";
 import MonitoreoPage from "./pages/MonitoreoPage";
 import ConfiguracionSLAPage from "./pages/Administracion/ConfiguracionSLA";
 import MetricasAnalistasPage from "./pages/Administracion/MetricasAnalistas";
+import ConfiguracionSitioPage from "./pages/Administracion/ConfiguracionSitio";
+import UsuariosPage from "./pages/Administracion/Usuarios";
 import LoginPage from "./pages/LoginPage";
 import { novedades } from "./data/mockData";
 import { API_BASE } from "./config/api";
 import { AuthProvider, useAuth } from "./context/AuthContext";
+import { SiteConfigProvider } from "./context/SiteConfigContext";
 import { setCsrfToken } from "./utils/csrf";
+import { tienePermiso } from "./utils/permisos";
+import { ShieldOff } from "lucide-react";
 
 // Deriva el "page id" (usado por Sidebar/Topbar para resaltar la sección activa)
 // a partir de la ruta actual. Las rutas anidadas (ej. /novedades/12) heredan
@@ -51,16 +56,7 @@ function NovedadesRoute() {
 }
 
 function InformesRoute() {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const state = location.state || {};
-  return (
-    <InformesPage
-      novedadParaInforme={state.novedadParaInforme || null}
-      highlightId={state.highlightId || null}
-      onClearNovedad={() => navigate(location.pathname, { replace: true, state: {} })}
-    />
-  );
+  return <InformesPage />;
 }
 
 function InformeGenerarRoute() {
@@ -72,6 +68,40 @@ function InformeGenerarRoute() {
       onVolver={() => navigate("/informes")}
       onGuardar={() => navigate("/informes")}
     />
+  );
+}
+
+// Guarda cada ruta detrás de la vista.* correspondiente. La raíz ("/") es
+// el destino de todos los demás redirects, así que si el propio usuario no
+// tiene acceso al Dashboard se muestra un mensaje terminal en vez de
+// redirigir a "/" de nuevo (evitaría un loop).
+function Guard({ user, permiso, children, terminal = false }) {
+  if (tienePermiso(user, permiso)) return children;
+  return terminal ? <SinAccesoPage /> : <Navigate to="/" replace />;
+}
+
+function SinAccesoPage() {
+  return (
+    <div className="page-shell">
+      <div className="hero-panel compact">
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <span style={{
+            display: "flex", alignItems: "center", justifyContent: "center",
+            width: 44, height: 44, borderRadius: "var(--radius-sm)",
+            background: "var(--accent-danger-soft)", flexShrink: 0,
+          }}>
+            <ShieldOff size={20} color="var(--accent-danger)" />
+          </span>
+          <div>
+            <h2 className="hero-title">No tienes acceso a esta sección</h2>
+            <p className="hero-text">
+              Tu usuario no tiene el permiso necesario para ver esta pantalla. Si crees que deberías tenerlo, pide a
+              un administrador que te lo asigne desde Usuarios y permisos.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -108,27 +138,49 @@ function Shell() {
 
   return (
     <div className="app-shell">
-      <Sidebar active={page} onNavigate={handleNavigate} alertCount={alertCount} user={user} onLogout={handleLogout} />
+      <Sidebar active={page} onNavigate={handleNavigate} alertCount={alertCount} user={user} />
       <div className="main-area">
-        <Topbar page={page} alertCount={alertCount} />
+        <Topbar page={page} alertCount={alertCount} user={user} onNavigate={handleNavigate} onLogout={handleLogout} />
         <div className="page-content">
           <Routes>
-            <Route path="/" element={<DashboardPage onNavigate={handleNavigate} />} />
-            <Route path="/monitoreo" element={<MonitoreoRoute />} />
-            <Route path="/clientes" element={<ClientesPage />} />
-            <Route path="/mantenimientos" element={<MantenimientoPage />} />
-            <Route path="/novedades" element={<NovedadesRoute />} />
-            <Route path="/novedades/:id" element={<NovedadDetallePage />} />
-            <Route path="/informes" element={<InformesRoute />} />
-            <Route path="/informes/generar" element={<InformeGenerarRoute />} />
-            <Route
-              path="/administracion/sla"
-              element={user?.is_staff ? <ConfiguracionSLAPage /> : <Navigate to="/" replace />}
-            />
-            <Route
-              path="/administracion/metricas-analistas"
-              element={user?.is_staff ? <MetricasAnalistasPage /> : <Navigate to="/" replace />}
-            />
+            <Route path="/" element={
+              <Guard user={user} permiso="vista.dashboard" terminal>
+                <DashboardPage onNavigate={handleNavigate} />
+              </Guard>
+            } />
+            <Route path="/monitoreo" element={
+              <Guard user={user} permiso="vista.monitoreo"><MonitoreoRoute /></Guard>
+            } />
+            <Route path="/clientes" element={
+              <Guard user={user} permiso="vista.clientes"><ClientesPage /></Guard>
+            } />
+            <Route path="/mantenimientos" element={
+              <Guard user={user} permiso="vista.mantenimientos"><MantenimientoPage /></Guard>
+            } />
+            <Route path="/novedades" element={
+              <Guard user={user} permiso="vista.novedades"><NovedadesRoute /></Guard>
+            } />
+            <Route path="/novedades/:id" element={
+              <Guard user={user} permiso="vista.novedades"><NovedadDetallePage /></Guard>
+            } />
+            <Route path="/informes" element={
+              <Guard user={user} permiso="vista.informes"><InformesRoute /></Guard>
+            } />
+            <Route path="/informes/generar" element={
+              <Guard user={user} permiso="vista.informes"><InformeGenerarRoute /></Guard>
+            } />
+            <Route path="/administracion/sla" element={
+              <Guard user={user} permiso="vista.administracion_novedades"><ConfiguracionSLAPage /></Guard>
+            } />
+            <Route path="/administracion/metricas-analistas" element={
+              <Guard user={user} permiso="vista.administracion_metricas"><MetricasAnalistasPage /></Guard>
+            } />
+            <Route path="/administracion/sitio" element={
+              <Guard user={user} permiso="vista.administracion_sitio"><ConfiguracionSitioPage /></Guard>
+            } />
+            <Route path="/administracion/usuarios" element={
+              <Guard user={user} permiso="vista.administracion_usuarios"><UsuariosPage /></Guard>
+            } />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>
@@ -159,7 +211,9 @@ export default function App() {
             path="/*"
             element={
               <RequireAuth>
-                <Shell />
+                <SiteConfigProvider>
+                  <Shell />
+                </SiteConfigProvider>
               </RequireAuth>
             }
           />

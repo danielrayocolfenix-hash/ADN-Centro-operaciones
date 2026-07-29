@@ -8,6 +8,8 @@ import { clientes, vehiculos } from "../data/mockData";
 import { formatFechaHora } from "../utils/helpers";
 import Toast from "../components/ui/Toast";
 import DrawerPanel from "../components/ui/DrawerPanel";
+import { useAuth } from "../context/AuthContext";
+import { tienePermiso } from "../utils/permisos";
 
 // ─── CATÁLOGOS DE MANTENIMIENTO ──────────────────────────────────────────────
 // Cada catálogo centraliza su propia metadata (ícono, color, label) para que
@@ -493,6 +495,9 @@ function ModalDetalle({ mantenimiento, onClose, onGenerarInforme, onNavigateInfo
 
 // ─── PÁGINA PRINCIPAL ─────────────────────────────────────────────────────────
 export default function MantenimientoPage({ onGenerarInforme, onNavigateInforme }) {
+  const { user } = useAuth();
+  const puedeCrear = tienePermiso(user, "mantenimientos.crear");
+  const puedeEditar = tienePermiso(user, "mantenimientos.editar");
   const [mantenimientos, setMantenimientos] = useState(mantenimientosIniciales);
   const [search, setSearch] = useState("");
   const [filtroEstado, setFiltroEstado] = useState("Todos");
@@ -566,10 +571,12 @@ export default function MantenimientoPage({ onGenerarInforme, onNavigateInforme 
             {stats.sinTecnico > 0 && ` · ${stats.sinTecnico} sin técnico asignado`}
           </div>
         </div>
-        <button className="btn btn-primary"
-          onClick={() => { setSelected(null); setModal("nuevo"); }}>
-          <Plus size={15} /> Registrar mantenimiento
-        </button>
+        {puedeCrear && (
+          <button className="btn btn-primary"
+            onClick={() => { setSelected(null); setModal("nuevo"); }}>
+            <Plus size={15} /> Registrar mantenimiento
+          </button>
+        )}
       </div>
 
       {/* KPIs rápidos */}
@@ -695,10 +702,12 @@ export default function MantenimientoPage({ onGenerarInforme, onNavigateInforme 
                         onClick={() => { setSelected(m); setModal("detalle"); }}>
                         <Eye size={14} />
                       </button>
-                      <button className="btn-icon" title="Editar"
-                        onClick={() => { setSelected(m); setModal("editar"); }}>
-                        <Edit2 size={14} />
-                      </button>
+                      {puedeEditar && (
+                        <button className="btn-icon" title="Editar"
+                          onClick={() => { setSelected(m); setModal("editar"); }}>
+                          <Edit2 size={14} />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
