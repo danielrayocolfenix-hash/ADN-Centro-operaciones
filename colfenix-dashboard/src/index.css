@@ -52,22 +52,22 @@ body.light-theme{
   --bg-hover: #eef4ff;
   --bg-input: #f8fafc;
 
-  --accent-primary: #2563eb;
-  --accent-secondary: #7c3aed;
+  --accent-primary: #d90429;
+  --accent-secondary: #8b0000;
   --accent-glow: rgba(37,99,235,.12);
 
   --accent-danger:#dc2626;
   --accent-success:#16a34a;
   --accent-warn:#d97706;
 
-  --accent-danger-soft: rgba(220, 38, 38, 0.10);
+  --accent-danger-soft: rgba(255, 46, 46, 0.16);
   --accent-warn-soft: rgba(217, 119, 6, 0.10);
   --accent-success-soft: rgba(22, 163, 74, 0.10);
 
   --text-primary:#0f172a;
   --text-secondary:#475569;
   --text-muted:#64748b;
-  --text-link:#2563eb;
+  --text-link:#ff3b3b;
 
   --border:#dce5f0;
   --border-accent:#bfdbfe;
@@ -571,6 +571,13 @@ html, body, #root {
 }
 .data-table tr:hover td { background: var(--bg-hover); color: var(--text-primary); }
 .data-table tr:last-child td { border-bottom: none; }
+
+/* ── Tabla de Novedades: zebra + transición de fila, alcance local a esta
+   vista (DynamicTable solo se usa acá) para no afectar otras tablas
+   .data-table de Administración que no fueron parte de este rediseño ── */
+.novedades-table .data-table tbody tr td { transition: background 0.1s ease; }
+.novedades-table .data-table tbody tr:nth-child(even) td { background: var(--bg-surface); }
+.novedades-table .data-table tbody tr:nth-child(even):hover td { background: var(--bg-hover); }
 
 /* ── BADGES ──────────────────────────────────────────────── */
 .badge {

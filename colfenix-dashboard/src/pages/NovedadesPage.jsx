@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle, Plus, FileText, Eye, Edit2, Trash2,
   Building2, ChevronDown, ChevronUp, UserCog,
+  ClipboardList, ShieldAlert, Timer, Clock,
 } from "lucide-react";
 import Toast from "../components/ui/Toast";
 import DrawerPanel from "../components/ui/DrawerPanel";
@@ -39,12 +40,12 @@ function ClienteGrupo({ cliente, items, actions, defaultOpen = true }) {
         </span>
         {open ? <ChevronUp size={16} color="var(--text-muted)" /> : <ChevronDown size={16} color="var(--text-muted)" />}
       </button>
-      {open && <NovedadesTable data={items} actions={actions} />}
+      {open && <NovedadesTable data={items} actions={actions} cliente={cliente} />}
     </div>
   );
 }
 
-function ModalNovedad({ novedad, onClose, onSave, onGenerarInforme, puedeGenerarInforme }) {
+function ModalNovedad({ novedad, onClose, onSave, onGenerarInforme, onVerInforme, puedeGenerarInforme }) {
   const isEdit = !!novedad?.id;
 
   return (
@@ -58,10 +59,16 @@ function ModalNovedad({ novedad, onClose, onSave, onGenerarInforme, puedeGenerar
           <button className="btn btn-secondary" onClick={onClose}>
             Cancelar
           </button>
-          {isEdit && !novedad.tiene_informe && puedeGenerarInforme && (
-            <button className="btn btn-success" onClick={() => onGenerarInforme(novedad)}>
-              <FileText size={14} /> Generar informe
-            </button>
+          {isEdit && puedeGenerarInforme && (
+            novedad.tiene_informe ? (
+              <button className="btn btn-success" onClick={() => onVerInforme(novedad.informe_id)}>
+                <Eye size={14} /> Ver informe
+              </button>
+            ) : (
+              <button className="btn btn-success" onClick={() => onGenerarInforme(novedad)}>
+                <FileText size={14} /> Generar informe
+              </button>
+            )
           )}
           <button type="submit" form="dynamic-form" className="btn btn-primary">
             {isEdit ? "Guardar cambios" : "Registrar novedad"}
@@ -131,7 +138,7 @@ function AsignarAnalistaDrawer({ novedad, analistas, onClose, onAsignar }) {
   );
 }
 
-export default function NovedadesPage({ onGenerarInforme }) {
+export default function NovedadesPage({ onGenerarInforme, onVerInforme }) {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [analistas, setAnalistas] = useState([]);
@@ -308,8 +315,16 @@ export default function NovedadesPage({ onGenerarInforme }) {
   };
 
   const alertasCriticas = novedades.filter(
-    (n) => n.nivel_prioridad === "Prioridad_Alta" && n.estado_novedad !== "Completado"
+    (n) => n.nivel_prioridad === "Alta" && n.estado_novedad !== "Completado"
   ).length;
+  const pendientes = novedades.filter((n) => n.estado_novedad === "Pendiente_por_responder").length;
+  // sla_estado viene del backend (apps.novedades.horario_laboral) — el
+  // mismo cálculo que alimenta la columna "SLA" de la tabla, acá agregado
+  // en dos cifras: lo que ya venció y lo que está por vencer.
+  const slaVencido = novedades.filter(
+    (n) => n.sla_estado === "VENCIDO" || n.sla_estado === "FINALIZADO_FUERA_DE_TIEMPO"
+  ).length;
+  const slaEnRiesgo = novedades.filter((n) => n.sla_estado === "EN_RIESGO").length;
 
   const rowActions = [
     {
@@ -320,12 +335,19 @@ export default function NovedadesPage({ onGenerarInforme }) {
       onClick: (row) => navigate(`/novedades/${row.id}`),
     },
     {
-      key: "generar-informe",
-      label: "Generar informe",
-      tooltip: "Crear el informe asociado a esta novedad",
-      icon: <FileText size={14} />,
+      // Antes siempre mandaba a crear un informe nuevo, incluso si la
+      // novedad ya tenía uno -- ahora la acción "transiciona": una vez
+      // existe informe, este mismo botón lo abre en vez de ofrecer
+      // crear otro (icon/label/tooltip son funciones de la fila, ver
+      // DynamicTable.jsx).
+      key: "informe",
+      label: (row) => (row.tiene_informe ? "Ver informe" : "Generar informe"),
+      tooltip: (row) => (row.tiene_informe
+        ? "Ya existe un informe para esta novedad — ábrelo"
+        : "Crear el informe asociado a esta novedad"),
+      icon: (row) => (row.tiene_informe ? <Eye size={14} /> : <FileText size={14} />),
       variant: "primary",
-      onClick: (row) => onGenerarInforme(row),
+      onClick: (row) => (row.tiene_informe && row.informe_id ? onVerInforme(row.informe_id) : onGenerarInforme(row)),
       show: (row) => row.estado_novedad !== "Pendiente_por_responder",
       permiso: "novedades.generar_informe",
     },
@@ -389,11 +411,43 @@ export default function NovedadesPage({ onGenerarInforme }) {
         )}
       </div>
 
-      <div className="hero-metrics">
-        <div className="metric-pill"><strong>{novedades.length}</strong> registros</div>
-        <div className="metric-pill"><strong>{alertasCriticas}</strong> alertas críticas</div>
-        <div className="metric-pill"><strong>{novedades.filter((n) => n.estado_novedad === "Pendiente_por_responder").length}</strong> pendientes</div>
-        <div className="metric-pill"><strong>{grupos.length}</strong> clientes</div>
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-label">Total novedades</div>
+          <div className="kpi-value">{novedades.length}</div>
+          <div className="kpi-sub">{grupos.length} {grupos.length === 1 ? "cliente" : "clientes"}</div>
+          <div className="kpi-icon"><ClipboardList size={40} /></div>
+        </div>
+        <div className="kpi-card danger">
+          <div className="kpi-label">Alertas críticas</div>
+          <div className="kpi-value">{alertasCriticas}</div>
+          <div className="kpi-sub">Prioridad alta, sin cerrar</div>
+          <div className="kpi-icon"><ShieldAlert size={40} /></div>
+        </div>
+        <div className="kpi-card danger">
+          <div className="kpi-label">SLA vencido</div>
+          <div className="kpi-value">{slaVencido}</div>
+          <div className="kpi-sub">Fuera del tiempo hábil pactado</div>
+          <div className="kpi-icon"><Timer size={40} /></div>
+        </div>
+        <div className="kpi-card warn">
+          <div className="kpi-label">SLA en riesgo</div>
+          <div className="kpi-value">{slaEnRiesgo}</div>
+          <div className="kpi-sub">Por vencer pronto</div>
+          <div className="kpi-icon"><Clock size={40} /></div>
+        </div>
+        <div className="kpi-card warn">
+          <div className="kpi-label">Pendientes por responder</div>
+          <div className="kpi-value">{pendientes}</div>
+          <div className="kpi-sub">Sin decisión registrada</div>
+          <div className="kpi-icon"><FileText size={40} /></div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Clientes con novedades</div>
+          <div className="kpi-value">{grupos.length}</div>
+          <div className="kpi-sub">Agrupados abajo por actividad</div>
+          <div className="kpi-icon"><Building2 size={40} /></div>
+        </div>
       </div>
 
       {loading && <div className="card" style={{ color: "var(--text-muted)" }}>Cargando novedades…</div>}
@@ -419,6 +473,7 @@ export default function NovedadesPage({ onGenerarInforme }) {
           onClose={() => setModal(null)}
           onSave={handleSave}
           onGenerarInforme={handleGenerarInforme}
+          onVerInforme={(informeId) => { setModal(null); setSelected(null); onVerInforme(informeId); }}
           puedeGenerarInforme={tienePermiso(user, "novedades.generar_informe")}
         />
       )}

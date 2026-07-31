@@ -1,7 +1,7 @@
 import React from "react";
 import {
   LayoutDashboard, Users, Wrench, AlertTriangle, FileText,
-  Radio, MapPin, Clock, BarChart3, Settings, ShieldCheck,
+  Radio, MapPin, Clock, BarChart3, Settings, ShieldCheck, BookOpen, Eye,
 } from "lucide-react";
 import { API_BASE } from "../../config/api";
 import { useSiteConfig } from "../../context/SiteConfigContext";
@@ -26,19 +26,39 @@ const navItems = [
     id: "administracion/metricas-analistas", label: "Métricas de analistas", icon: BarChart3,
     group: "Administración", activeId: "administracion", permiso: "vista.administracion_metricas",
   },
-  {
-    id: "administracion/sitio", label: "Configuración del sitio", icon: Settings,
-    group: "Administración", activeId: "administracion", permiso: "vista.administracion_sitio",
-  },
+
   {
     id: "administracion/usuarios", label: "Usuarios y permisos", icon: ShieldCheck,
     group: "Administración", activeId: "administracion", permiso: "vista.administracion_usuarios",
   },
+  {
+    // Deja ver, de solo lectura, exactamente lo mismo que ve un cliente en
+    // su propio portal (/portal) -- útil para soporte o demos, sin tener
+    // que loguearse con una cuenta de cliente. Mismo permiso que el resto
+    // de la configuración de novedades: no es una pantalla de edición.
+    id: "administracion/vista-cliente", label: "Vista de cliente", icon: Eye,
+    group: "Administración", activeId: "administracion", permiso: "vista.administracion_novedades",
+  },
+  // Sin `permiso` -- visible para cualquier usuario. Pantalla propia con
+  // recorridos guiados (Driver.js) "en vivo" sobre novedades reales.
+  { id: "manual", label: "Manual de uso", icon: BookOpen, group: "Ayuda" },
 ];
 
-export default function Sidebar({ active, onNavigate, alertCount, user }) {
+// Los ítems con id compuesto (ej. "administracion/sla") son sub-rutas
+// propias dentro de un mismo grupo colapsado ("administracion" -- ver
+// pageIdFromPath en App.jsx, que junta cualquier /administracion/* bajo un
+// solo id para el título del Topbar). Si se comparara solo contra `active`
+// (ese id colapsado), los 3 ítems de Administración se marcarían activos a
+// la vez sin importar cuál sub-ruta esté abierta -- por eso estos comparan
+// contra la ruta completa en vez de contra el id de grupo.
+function esActivo(item, active, currentPath) {
+  if (item.id.includes("/")) return currentPath === `/${item.id}`;
+  return active === (item.activeId || item.id);
+}
+
+export default function Sidebar({ active, currentPath, onNavigate, alertCount, user }) {
   const { config } = useSiteConfig();
-  const visibles = navItems.filter((i) => tienePermiso(user, i.permiso));
+  const visibles = navItems.filter((i) => !i.permiso || tienePermiso(user, i.permiso));
   const groups = [...new Set(visibles.map(i => i.group))];
 
   return (
@@ -66,7 +86,7 @@ export default function Sidebar({ active, onNavigate, alertCount, user }) {
             {visibles.filter(i => i.group === group).map(item => (
               <button
                 key={item.id}
-                className={`nav-item ${active === (item.activeId || item.id) ? "active" : ""}`}
+                className={`nav-item ${esActivo(item, active, currentPath) ? "active" : ""}`}
                 onClick={() => onNavigate(item.id)}
               >
                 <span className="nav-item-icon"><item.icon size={16} /></span>

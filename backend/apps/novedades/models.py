@@ -81,9 +81,9 @@ class MotivoPositivo(models.Model):
 class Novedades(models.Model):
 
     NIVEL_PRIORIDAD = [
-        ('Prioridad_Alta', 'Prioridad Alta'),
-        ('Prioridad_Media', 'Prioridad Media'),
-        ('Prioridad_Baja', 'Prioridad Baja')
+        ('Alta', 'Alta'),
+        ('Media', 'Media'),
+        ('Baja', 'Baja')
     ]
 
     ESTADO_DD_CHOICES = [
@@ -211,6 +211,59 @@ class Novedades(models.Model):
         blank=True
     )
 
+    dispositivo_dvr = models.ForeignKey(
+        'Vehiculo.DispositivoDVR',
+        on_delete=models.PROTECT,
+        related_name='novedades',
+        null=True,
+        blank=True
+    )
+
+    fecha_ingreso_dvr = models.DateTimeField(
+        null=True,
+        blank=True,
+        editable=False
+    )
+
+    fecha_salida_dvr = models.DateField(
+        null=True,
+        blank=True
+    )
+
+    RESPUESTA_CLIENTE_CHOICES = [
+        ('Conforme', 'Conforme'),
+        ('No_conforme', 'No conforme'),
+    ]
+
+    # NUEVO: respuesta del cliente sobre el informe ya generado, registrada
+    # desde el portal de cliente (apps.novedades.views_portal /
+    # ClienteResponderNovedad) -- es de una sola vía, no editable desde
+    # NovedadDetalleView (ese endpoint es staff-only).
+    respuesta_cliente = models.CharField(
+        max_length=20,
+        choices=RESPUESTA_CLIENTE_CHOICES,
+        null=True,
+        blank=True
+    )
+
+    comentario_cliente = models.TextField(
+        blank=True
+    )
+
+    fecha_respuesta_cliente = models.DateTimeField(
+        null=True,
+        blank=True,
+        editable=False
+    )
+
+    respondido_por_cliente = models.ForeignKey(
+        UsuariosColfenix,
+        on_delete=models.PROTECT,
+        related_name='novedades_respondidas_cliente',
+        null=True,
+        blank=True
+    )
+
     motivo_negativo = models.ForeignKey(
         MotivoNegativo,
         on_delete=models.PROTECT,
@@ -264,6 +317,10 @@ class Novedades(models.Model):
             models.Index(fields=['estado_dd']),
             models.Index(fields=['fecha_novedad']),
             models.Index(fields=['cliente', 'estado_novedad']),
+            # Usado por sugerir_motivo() -- historial de motivos por
+            # vehículo + tipo de informe, para sugerir el motivo más
+            # frecuente al tomar una decisión de revisión.
+            models.Index(fields=['vehiculo', 'tipo_informe']),
         ]
 
     def clean(self):
@@ -438,6 +495,129 @@ class NovedadEvento(models.Model):
 
     def __str__(self):
         return f"{self.novedad.codigo_novedad}: {self.campo} → {self.valor_nuevo}"
+
+
+class NovedadNotificacion(models.Model):
+    """
+    Notificación in-app para el cliente del portal: una fila por cada evento
+    relevante que ocurre sobre su Novedad (el caso entra en revisión, se
+    genera un informe que requiere su respuesta...) -- Centro de
+    notificaciones del portal, fase inicial. A propósito NO es un motor de
+    reglas configurable (mismo espíritu que EtapaFlujo/CRITERIOS_ETAPA): los
+    eventos que disparan una notificación están hardcodeados en
+    apps.novedades.notificaciones, llamados desde los pocos puntos del
+    código donde ese evento ya ocurre. Sin canal de correo todavía -- esto
+    es solo lo que se ve en la campana del portal.
+    """
+
+    SEVERIDAD_CHOICES = [
+        ("informativo", "Informativo"),
+        ("accion_requerida", "Acción requerida"),
+    ]
+
+    novedad = models.ForeignKey(
+        Novedades,
+        on_delete=models.CASCADE,
+        related_name="notificaciones_cliente"
+    )
+
+    # Denormalizado desde novedad.cliente_id a propósito: el listado del
+    # portal (GET /api/portal/notificaciones/) filtra por cliente en cada
+    # carga y en cada ciclo de polling -- evita el join contra Novedades en
+    # la consulta más frecuente de todo el portal.
+    cliente = models.ForeignKey(
+        Cliente,
+        on_delete=models.CASCADE,
+        related_name="notificaciones"
+    )
+
+    severidad = models.CharField(
+        max_length=20,
+        choices=SEVERIDAD_CHOICES,
+        default="informativo"
+    )
+
+    mensaje = models.CharField(
+        max_length=255
+    )
+
+    leido = models.BooleanField(default=False)
+
+    fecha_leido = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
+    creado = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    class Meta:
+        ordering = ['-creado']
+        verbose_name = 'Notificación de cliente'
+        verbose_name_plural = 'Notificaciones de cliente'
+        indexes = [
+            models.Index(fields=['cliente', 'leido']),
+        ]
+
+    def __str__(self):
+        return f"{self.novedad.codigo_novedad}: {self.mensaje[:40]}"
+
+
+class EtapaFlujo(models.Model):
+    """
+    Metadata configurable (nombre/descripción/orden/activo) de cada paso
+    conocido del flujo de revisión DVR (track=ANALISTA) o del portal de
+    clientes (track=CLIENTE) -- a propósito NO es un motor de reglas: la
+    `clave` de cada fila debe coincidir con una de las claves fijas que ya
+    tienen su lógica de "completado" escrita en código
+    (apps.novedades.etapas.CRITERIOS_ETAPA, con un espejo equivalente en el
+    frontend). Un administrador puede renombrar/reordenar/activar-desactivar
+    una etapa conocida desde Administración › Configuración de novedades;
+    no puede crear una etapa nueva con lógica propia desde esa pantalla --
+    eso sigue requiriendo una migración + código.
+    """
+
+    TRACK_CHOICES = [
+        ("ANALISTA", "Analista (revisión interna)"),
+        ("CLIENTE", "Cliente (portal externo)"),
+    ]
+
+    clave = models.CharField(max_length=50, unique=True)
+
+    track = models.CharField(max_length=10, choices=TRACK_CHOICES)
+
+    nombre = models.CharField(max_length=100)
+
+    descripcion = models.CharField(
+        max_length=250,
+        blank=True,
+        help_text="Subtítulo mostrado bajo el nombre del paso en el asistente.",
+    )
+
+    orden = models.PositiveIntegerField(
+        default=0,
+        help_text="Orden de aparición dentro de su track (analista o cliente).",
+    )
+
+    activo = models.BooleanField(default=True)
+
+    actualizado = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["track", "orden"]
+        verbose_name = "Etapa del flujo"
+        verbose_name_plural = "Etapas del flujo"
+
+    def clean(self):
+        from apps.novedades.etapas import CRITERIOS_ETAPA
+        if self.clave not in CRITERIOS_ETAPA:
+            raise ValidationError({
+                "clave": f"'{self.clave}' no tiene un criterio de completado registrado en apps.novedades.etapas.",
+            })
+
+    def __str__(self):
+        return f"[{self.get_track_display()}] {self.nombre}"
 
 
 class HorarioLaboral(models.Model):

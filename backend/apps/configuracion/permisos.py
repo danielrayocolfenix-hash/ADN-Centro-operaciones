@@ -42,3 +42,17 @@ def claves_de(user):
     if user.is_staff:
         return list(Permiso.objects.values_list("clave", flat=True))
     return list(user.permisos.values_list("clave", flat=True))
+
+
+def es_cliente_de(user, novedad):
+    """
+    True si `user` es un usuario de portal (tipo=CLIENTE) cuyo Cliente es el
+    dueño de `novedad`. No usa el catálogo `Permiso` -- son solo 3 endpoints
+    de portal, no vale la pena un sistema de permisos paralelo para eso.
+    """
+    return (
+        user.is_authenticated
+        and getattr(user, "tipo", "STAFF") == "CLIENTE"
+        and user.cliente_id is not None
+        and user.cliente_id == novedad.cliente_id
+    )

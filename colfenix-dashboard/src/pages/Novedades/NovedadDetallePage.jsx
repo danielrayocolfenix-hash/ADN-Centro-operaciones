@@ -1,36 +1,95 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import ExcelJS from "exceljs";
+import { driver } from "driver.js";
+import "driver.js/dist/driver.css";
 import {
   ArrowLeft, Truck, User, MapPin, Hash, Paperclip, Upload,
-  CheckCircle2, XCircle, Clock, Save,
-  Download, FileDown, SlidersHorizontal, AlertTriangle, Plus, X,
+  CheckCircle2, XCircle, Clock, Save, HardDrive, LogOut, FileCheck, Lock,
+  Download, FileDown, AlertTriangle, Plus, X, Lightbulb,
 } from "lucide-react";
 import { API_BASE } from "../../config/api";
 import { getCsrfToken } from "../../utils/csrf";
-import { formatFechaHora } from "../../utils/helpers";
+import { formatFecha, formatFechaHora, hexToArgb, formatFechaCortaISO, formatDuracionLarga } from "../../utils/helpers";
 import Toast from "../../components/ui/Toast";
+import DrawerPanel from "../../components/ui/DrawerPanel";
 import { useAuth } from "../../context/AuthContext";
 import { tienePermiso } from "../../utils/permisos";
 
-const ESTADOS_DD = [
-  { value: "PENDIENTE_DD", label: "Pendiente DD" },
-  { value: "ENCOLADO", label: "Encolado" },
-  { value: "EN_REVISION", label: "En revisión" },
-  { value: "TERMINADO", label: "Terminado" },
-];
+// Recorrido guiado (Driver.js) del flujo de revisión DVR -- se dispara "en
+// vivo" desde una tarjeta de /manual (ManualPage.jsx), que navega acá con
+// location.state = { iniciarTour: true, volverA: "/manual" }. Los `element`
+// apuntan a ids puestos a propósito en Ficha, FlujoWizard, cada PasoSeccion y
+// Trazabilidad; el texto reutiliza las mismas descripciones que ya explican
+// cada paso en pantalla, para no mantener el mismo contenido en dos lugares
+// con redacciones distintas. `onFinish` se llama al cerrar el recorrido
+// (Listo, X o Escape) -- así quien lo abrió desde el manual vuelve ahí, en
+// vez de quedar varado en una novedad real cualquiera.
+function iniciarTourRevisionDVR(onFinish) {
+  const recorrido = driver({
+    showProgress: true,
+    nextBtnText: "Siguiente",
+    prevBtnText: "Anterior",
+    doneBtnText: "Listo",
+    onDestroyed: onFinish,
+    steps: [
+      {
+        element: "#tour-ficha",
+        popover: { title: "Ficha del caso", description: "Resumen rápido: cliente, vehículo, dispositivo DVR y las fechas clave de la novedad." },
+      },
+      {
+        element: "#tour-flujo-wizard",
+        popover: { title: "Flujo del caso", description: "Los 6 pasos de la revisión de un vistazo -- en verde los que ya completaste, resaltado el paso actual." },
+      },
+      {
+        element: "#tour-paso-1",
+        popover: { title: "1. Novedad registrada", description: "Se creó el caso en el sistema y quedó a la espera de que la DVR física llegue a Colfenix." },
+      },
+      {
+        element: "#tour-paso-2",
+        popover: { title: "2. DVR ingresó", description: "El vehículo tiene 2 DVR físicas -- indica cuál de las 2 (Máquina 1 o 2) llegó a Colfenix para revisión. Si la pila de esa máquina está vencida, acá mismo se avisa y se puede registrar el cambio." },
+      },
+      {
+        element: "#tour-paso-3",
+        popover: { title: "3. En revisión", description: "Confirma que ya empezaste a revisar físicamente la grabación de la DVR. Acá también se adjunta la evidencia del caso." },
+      },
+      {
+        element: "#tour-paso-4",
+        popover: { title: "4. Decisión tomada", description: "Registra si la revisión fue Positiva (sí hay grabación) o Negativa (no hay), con el motivo correspondiente." },
+      },
+      {
+        element: "#tour-paso-5",
+        popover: { title: "5. Informe generado", description: "Con la decisión ya tomada, genera el informe formal que se entrega al cliente con los hallazgos de la revisión." },
+      },
+      {
+        element: "#tour-paso-6",
+        popover: { title: "6. DVR salió de Colfenix", description: "Ya con el informe generado, registra la fecha en que la DVR física salió de Colfenix de vuelta al vehículo." },
+      },
+      {
+        element: "#tour-trazabilidad",
+        popover: { title: "Trazabilidad", description: "Historial completo de cada cambio (quién, cuándo, qué), exportable a Excel." },
+      },
+    ],
+  });
+  recorrido.drive();
+}
 
-function Ficha({ novedad, informe }) {
+const ORDEN_ESTADO_DD = ["PENDIENTE_DD", "ENCOLADO", "EN_REVISION", "TERMINADO"];
+
+function Ficha({ novedad }) {
   const campos = [
     { icon: Hash, label: "Código", value: novedad.codigo_novedad },
     { icon: User, label: "Cliente", value: novedad.cliente },
-    { icon: Paperclip, label: "Tipo informe", value: informe?.nombre || novedad.informe?.nombre },
+    { icon: Paperclip, label: "Tipo informe", value: novedad.categoria_informe ? `${novedad.categoria_informe} · ${novedad.tipo_informe}` : novedad.tipo_informe },
     { icon: Truck, label: "Vehículo", value: `${novedad.vehiculo} · ${novedad.numero_interno}` },
+    { icon: HardDrive, label: "Dispositivo DVR", value: novedad.dispositivo_dvr },
+    { icon: HardDrive, label: "Ingreso DVR", value: novedad.fecha_ingreso_dvr ? formatFechaHora(novedad.fecha_ingreso_dvr) : null },
+    { icon: LogOut, label: "Salida DVR", value: novedad.fecha_salida_dvr },
     { icon: User, label: "Conductor", value: novedad.conductor },
     { icon: MapPin, label: "Ruta", value: novedad.ruta },
   ];
   return (
-    <div className="card">
+    <div id="tour-ficha" className="card">
       <div className="grid-3" style={{ gap: 12 }}>
         {campos.map((c) => (
           <div key={c.label} style={{
@@ -54,50 +113,288 @@ function Ficha({ novedad, informe }) {
   );
 }
 
-function Stepper({ estado, onChange, disabled }) {
-  const activeIndex = ESTADOS_DD.findIndex((e) => e.value === estado);
+// Resumen macro del caso completo -- de solo lectura, calculado a partir de
+// datos que ya vienen en `novedad` (sin estado propio en backend). El
+// control real de cada paso vive en las PasoSeccion de abajo (IngresoDVR,
+// EnRevision, DecisionRevision, InformeCard, SalidaDVR); esto es solo el "mapa".
+//
+// Nombre/descripción/orden/activo de cada paso vienen de EtapaFlujo (backend,
+// administrable desde Configuración de novedades) -- lo que sigue siendo
+// código fijo acá es el criterio de "completado" por clave, espejo exacto de
+// apps.novedades.etapas.CRITERIOS_ETAPA en el backend. Un admin puede
+// renombrar/reordenar/desactivar un paso conocido; no puede inventar uno
+// nuevo con lógica propia desde la pantalla de configuración.
+const ICONO_POR_CLAVE = {
+  registrada: Hash, dvr_ingreso: HardDrive, revision: Clock,
+  decision: CheckCircle2, informe: FileCheck, salida_dvr: LogOut,
+};
+const DONE_POR_CLAVE = {
+  registrada: () => true,
+  dvr_ingreso: (n) => !!n.dispositivo_dvr_id,
+  revision: (n) => ["EN_REVISION", "TERMINADO"].includes(n.estado_dd),
+  decision: (n) => !!n.respuesta_novedad,
+  informe: (n) => !!n.tiene_informe,
+  salida_dvr: (n) => !!n.fecha_salida_dvr,
+};
+
+function calcularPasosFlujo(novedad, etapasAnalista) {
+  return etapasAnalista.map((e) => ({
+    key: e.clave,
+    label: e.nombre,
+    descripcion: e.descripcion,
+    icon: ICONO_POR_CLAVE[e.clave] || Hash,
+    done: (DONE_POR_CLAVE[e.clave] || (() => false))(novedad),
+  }));
+}
+
+function FlujoWizard({ pasos }) {
+  const primerPendiente = pasos.findIndex((p) => !p.done);
+  const current = primerPendiente === -1 ? pasos.length - 1 : primerPendiente;
+
   return (
-    <div className="card">
-      <div className="card-header"><span className="card-title">Estado de revisión DVR</span></div>
+    <div id="tour-flujo-wizard" className="card">
+      <div className="card-header"><span className="card-title">Flujo del caso</span></div>
       <div style={{ display: "flex" }}>
-        {ESTADOS_DD.map((paso, i) => {
-          const done = i <= activeIndex;
-          const current = i === activeIndex;
+        {pasos.map((paso, i) => {
+          const isCurrent = i === current && !paso.done;
           return (
-            <button
-              key={paso.value}
-              onClick={() => !disabled && onChange(paso.value)}
-              disabled={disabled}
-              style={{
-                flex: 1, position: "relative", padding: "18px 4px 0", textAlign: "left",
-                background: "none", border: "none", cursor: disabled ? "default" : "pointer",
-                fontFamily: "inherit", opacity: disabled ? 0.75 : 1,
-              }}
-            >
-              <span style={{
-                position: "absolute", top: 4, left: 0, width: 11, height: 11, borderRadius: "50%",
-                background: done ? "var(--accent-primary)" : "var(--bg-surface)",
-                border: `2px solid ${done ? "var(--accent-primary)" : "var(--border)"}`,
-                boxShadow: current ? "0 0 0 3px var(--accent-glow)" : "none",
-                zIndex: 1,
-              }} />
+            <div key={paso.key} style={{ flex: 1, position: "relative", padding: "0 4px", textAlign: "center" }}>
               {i > 0 && (
                 <span style={{
-                  position: "absolute", top: 9, left: "-50%", right: "50%", height: 2,
-                  background: i <= activeIndex ? "var(--accent-primary)" : "var(--border)",
+                  position: "absolute", top: 15, left: "-50%", right: "50%", height: 2,
+                  background: pasos[i - 1].done ? "var(--accent-success)" : "var(--border)",
                 }} />
               )}
               <div style={{
-                fontSize: 12, fontWeight: current ? 700 : 500,
-                color: current ? "var(--accent-primary)" : done ? "var(--text-primary)" : "var(--text-muted)",
+                width: 30, height: 30, borderRadius: "50%", margin: "0 auto 6px", position: "relative", zIndex: 1,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                background: paso.done ? "var(--accent-success)" : isCurrent ? "var(--accent-primary)" : "var(--bg-surface)",
+                border: `2px solid ${paso.done ? "var(--accent-success)" : isCurrent ? "var(--accent-primary)" : "var(--border)"}`,
+                boxShadow: isCurrent ? "0 0 0 4px var(--accent-glow)" : "none",
+              }}>
+                <paso.icon size={14} color={paso.done || isCurrent ? "#fff" : "var(--text-muted)"} />
+              </div>
+              <div style={{
+                fontSize: 11, fontWeight: isCurrent ? 700 : 500,
+                color: isCurrent ? "var(--accent-primary)" : paso.done ? "var(--text-primary)" : "var(--text-muted)",
               }}>
                 {paso.label}
               </div>
-            </button>
+            </div>
           );
         })}
       </div>
     </div>
+  );
+}
+
+// Contenedor numerado que usan todos los pasos del flujo (2 a 6) para verse
+// como una secuencia real: "hecho" (verde), "actual" (el único accionable,
+// azul) o "bloqueado" (atenuado, sin controles, solo el candado) -- así toda
+// la pantalla queda ordenada de arriba a abajo, no solo la barra de arriba.
+function PasoSeccion({ numero, titulo, descripcion, estado, children }) {
+  const bloqueado = estado === "bloqueado";
+  return (
+    <div id={`tour-paso-${numero}`} className="card" style={{ opacity: bloqueado ? 0.6 : 1 }}>
+      <div className="card-header" style={{ alignItems: "flex-start" }}>
+        <span style={{ display: "flex", gap: 10, minWidth: 0 }}>
+          <span style={{
+            display: "inline-flex", alignItems: "center", justifyContent: "center",
+            width: 22, height: 22, borderRadius: "50%", fontSize: 11, fontWeight: 700, flexShrink: 0,
+            background: estado === "hecho" ? "var(--accent-success)" : estado === "actual" ? "var(--accent-primary)" : "var(--bg-surface)",
+            color: bloqueado ? "var(--text-muted)" : "#fff",
+            border: bloqueado ? "2px solid var(--border)" : "none",
+            marginTop: 1,
+          }}>
+            {estado === "hecho" ? <CheckCircle2 size={13} /> : numero}
+          </span>
+          <span style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
+            <span className="card-title" style={{ marginBottom: 0 }}>{titulo}</span>
+            {descripcion && (
+              <span style={{ fontSize: 11.5, color: "var(--text-muted)", fontWeight: 400 }}>{descripcion}</span>
+            )}
+          </span>
+        </span>
+        {estado === "actual" && (
+          <span className="badge" style={{ background: "var(--accent-glow)", color: "var(--accent-primary)", flexShrink: 0 }}>
+            Paso actual
+          </span>
+        )}
+      </div>
+      {bloqueado ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--text-muted)" }}>
+          <Lock size={13} /> Completa el paso anterior para continuar.
+        </div>
+      ) : children}
+    </div>
+  );
+}
+
+// Estado de la pila de cada dispositivo -- lo calcula el backend
+// (apps.Vehiculo.pila.calcular_estado_pila) contra la caducidad configurada
+// en Administración › Configuración SLA › Caducidad de pila de la DVR.
+const PILA_ESTADO_INFO = {
+  vencida: { label: "Pila vencida -- cambio urgente", sufijo: "⚠ pila vencida", color: "var(--accent-danger)", bg: "var(--accent-danger-soft)" },
+  por_vencer: { label: "Pila por vencer", sufijo: "⚠ pila por vencer", color: "var(--accent-warn)", bg: "var(--accent-warn-soft)" },
+  vigente: { label: "Pila vigente", sufijo: null, color: "var(--accent-success)", bg: "var(--accent-success-soft)" },
+  sin_registro: { label: "Sin registro de cambio de pila", sufijo: null, color: "var(--text-muted)", bg: "var(--bg-surface)" },
+};
+
+// Ícono de reloj que abre el selector de fecha nativo y, al elegir una
+// fecha, registra el cambio de pila de una sola vez -- acceso rápido para
+// cuando la pila aparece vencida, sin salir del flujo hacia Administración.
+function BotonCambioPila({ dispositivoId, onRegistrar }) {
+  const inputRef = useRef(null);
+  const [guardando, setGuardando] = useState(false);
+
+  const abrirSelector = () => {
+    if (guardando) return;
+    if (inputRef.current?.showPicker) inputRef.current.showPicker();
+    else inputRef.current?.click();
+  };
+
+  const onChange = async (e) => {
+    const fecha = e.target.value;
+    if (!fecha) return;
+    setGuardando(true);
+    try {
+      await onRegistrar(dispositivoId, fecha);
+    } finally {
+      setGuardando(false);
+      e.target.value = "";
+    }
+  };
+
+  return (
+    <span style={{ position: "relative", display: "inline-flex", marginLeft: 6 }}>
+      <button
+        type="button"
+        onClick={abrirSelector}
+        disabled={guardando}
+        title="Registrar cambio de pila"
+        style={{
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: 18, height: 18, borderRadius: "50%", border: "none",
+          cursor: guardando ? "default" : "pointer", background: "rgba(255,255,255,0.35)", color: "inherit",
+          flexShrink: 0, padding: 0,
+        }}
+      >
+        <Clock size={11} />
+      </button>
+      <input
+        ref={inputRef}
+        type="date"
+        onChange={onChange}
+        style={{ position: "absolute", opacity: 0, width: 0, height: 0, pointerEvents: "none" }}
+      />
+    </span>
+  );
+}
+
+// Contenido del paso "DVR ingresó" -- sin card propia, vive dentro de
+// PasoSeccion. Elegir una máquina marca ENCOLADO solo (ver
+// handleDispositivoDvr en el componente principal).
+function IngresoDVR({ dispositivoDvrId, dispositivosDisponibles, onDispositivoDvr, fechaIngreso, onRegistrarCambioPila, disabled }) {
+  const seleccionado = dispositivosDisponibles.find((d) => d.id === dispositivoDvrId);
+  const estadoPila = seleccionado && PILA_ESTADO_INFO[seleccionado.estado];
+
+  return (
+    <>
+      <div className="form-group" style={{ marginBottom: 0 }}>
+        <label className="form-label">¿Qué máquina llegó a revisión?</label>
+        {dispositivosDisponibles.length > 0 ? (
+          <select
+            className="form-input"
+            value={dispositivoDvrId ?? ""}
+            onChange={(e) => onDispositivoDvr(e.target.value ? Number(e.target.value) : null)}
+            disabled={disabled}
+          >
+            <option value="">Sin especificar</option>
+            {dispositivosDisponibles.map((d) => {
+              const info = PILA_ESTADO_INFO[d.estado];
+              return (
+                <option key={d.id} value={d.id}>
+                  {d.label}{info?.sufijo ? ` -- ${info.sufijo}` : ""}
+                </option>
+              );
+            })}
+          </select>
+        ) : (
+          <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
+            No hay dispositivos DVR registrados para este vehículo.
+          </div>
+        )}
+      </div>
+      {estadoPila && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            marginTop: 10,
+            padding: "6px 10px",
+            borderRadius: "var(--radius-sm)",
+            background: estadoPila.bg,
+            color: estadoPila.color,
+            fontSize: 12,
+            fontWeight: 600,
+          }}
+        >
+          {(seleccionado.estado === "vencida" ||
+            seleccionado.estado === "por_vencer") && (
+            <AlertTriangle size={13} />
+          )}
+
+          {seleccionado.estado === "vencida" && (
+            <span>
+              {estadoPila.label}: se venció el <strong>{formatFecha(seleccionado.proxima_fecha)}</strong>
+              {" "}(hace <strong>{seleccionado.dias_vencida} días</strong>).
+              <BotonCambioPila dispositivoId={seleccionado.id} onRegistrar={onRegistrarCambioPila} />
+            </span>
+          )}
+
+          {seleccionado.estado === "por_vencer" && (
+            <span>
+              {estadoPila.label}: vence el <strong>{formatFecha(seleccionado.proxima_fecha)}</strong>
+              {" "}(en <strong>{seleccionado.dias_restantes} días</strong>). Último cambio de pila:{" "}
+              {formatFecha(seleccionado.fecha_ultimo_cambio_pila)}.
+            </span>
+          )}
+
+          {seleccionado.estado === "vigente" && (
+            <span>
+              {estadoPila.label} hasta el <strong>{formatFecha(seleccionado.proxima_fecha)}</strong>
+              {" "}(<strong>{seleccionado.dias_restantes} días</strong>).
+            </span>
+          )}
+
+          {seleccionado.estado === "sin_registro" && (
+            <span>{estadoPila.label}.</span>
+          )}
+        </div>
+      )}
+      {fechaIngreso && (
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 10 }}>
+          Ingresó a Colfenix: {formatFechaHora(fechaIngreso)} -- quedó marcado ENCOLADO automáticamente.
+        </div>
+      )}
+    </>
+  );
+}
+
+// Contenido del paso "En revisión" -- una sola acción: el analista confirma
+// que empezó a revisar la DVR físicamente. TERMINADO ya no se marca acá, se
+// deriva solo al tomar la decisión (ver handleRespuesta).
+function EnRevision({ estadoDD, fechaInicioRevision, onMarcarEnRevision, disabled }) {
+  const yaEnRevision = estadoDD === "EN_REVISION" || estadoDD === "TERMINADO";
+  return yaEnRevision ? (
+    <div style={{ fontSize: 13, color: "var(--accent-success)", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+      <CheckCircle2 size={15} /> En revisión{fechaInicioRevision ? ` desde ${formatFechaHora(fechaInicioRevision)}` : ""}
+    </div>
+  ) : (
+    <button className="btn btn-primary btn-sm" onClick={onMarcarEnRevision} disabled={disabled}>
+      <Clock size={13} /> Marcar en revisión
+    </button>
   );
 }
 
@@ -213,15 +510,49 @@ function MotivoCombobox({ value, options, onSeleccionar, onCrearNuevo, placehold
   );
 }
 
+// Pill clickeable de "asistente determinista" -- sugiere el motivo más
+// frecuente entre novedades históricas del mismo vehículo + tipo de informe
+// (ver apps.novedades.views.sugerir_motivo, solo Count(), sin IA). Se oculta
+// sola una vez el analista ya eligió un motivo, para no estorbar.
+function PillSugerencia({ sugerencia, onAplicar }) {
+  if (!sugerencia) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => onAplicar(sugerencia.motivo_id)}
+      className="badge"
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer",
+        background: "var(--accent-glow)", color: "var(--accent-primary)",
+        border: "1px solid transparent", marginBottom: 8, fontFamily: "inherit",
+      }}
+    >
+      <Lightbulb size={12} />
+      Sugerido: {sugerencia.nombre} ({sugerencia.total} de {sugerencia.casos_considerados} casos similares)
+    </button>
+  );
+}
+
 function DecisionRevision({
-  respuesta, motivoId, detalle, motivos, onRespuesta, onMotivo, onDetalle,
+  novedadId, respuesta, motivoId, detalle, motivos, onRespuesta, onMotivo, onDetalle,
   motivosPositivos, motivoPositivoId, detallePositivo, onMotivoPositivo, onDetallePositivo,
   onCrearMotivo, onCrearMotivoPositivo,
   disabled,
 }) {
+  const [sugerencia, setSugerencia] = useState(null);
+
+  useEffect(() => {
+    if (!respuesta) { setSugerencia(null); return; }
+    let cancelado = false;
+    fetch(`${API_BASE}/api/novedades/${novedadId}/sugerir-motivo/?respuesta_novedad=${respuesta}`, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => { if (!cancelado) setSugerencia(data?.sugerencia || null); })
+      .catch(() => {});
+    return () => { cancelado = true; };
+  }, [respuesta, novedadId]);
+
   return (
-    <div className="card">
-      <div className="card-header"><span className="card-title">Resultado de la revisión</span></div>
+    <>
       <div style={{ display: "flex", gap: 10, marginBottom: respuesta ? 16 : 0 }}>
         <button
           className={`btn ${respuesta === "Positiva" ? "btn-success" : "btn-secondary"}`}
@@ -245,6 +576,7 @@ function DecisionRevision({
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">Motivo</label>
+            {!motivoPositivoId && <div><PillSugerencia sugerencia={sugerencia} onAplicar={onMotivoPositivo} /></div>}
             <MotivoCombobox
               value={motivoPositivoId}
               options={motivosPositivos}
@@ -275,6 +607,7 @@ function DecisionRevision({
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">Motivo</label>
+            {!motivoId && <div><PillSugerencia sugerencia={sugerencia} onAplicar={onMotivo} /></div>}
             <MotivoCombobox
               value={motivoId}
               options={motivos}
@@ -297,11 +630,112 @@ function DecisionRevision({
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
-const TRAZA_LABELS = { estado_dd: "Estado DD", respuesta_novedad: "Respuesta", creacion: "Creación" };
+const TRAZA_LABELS = {
+  estado_dd: "Estado DD",
+  respuesta_novedad: "Respuesta",
+  dispositivo_dvr: "Dispositivo DVR",
+  fecha_salida_dvr: "Salida de la DVR",
+  analista: "Analista asignado",
+  respuesta_cliente: "Respuesta del cliente",
+  creacion: "Creación",
+};
+
+// Los valores de estado_dd que guarda NovedadEvento son el código crudo del
+// modelo (ENCOLADO, EN_REVISION...) -- acá una versión legible para el
+// historial, distinta de get_estado_dd_display() del backend (que devuelve
+// todo en mayúsculas, pensado para el badge de la tabla, no para una frase).
+const ESTADO_DD_LABELS = {
+  PENDIENTE_DD: "Pendiente de recibir la DVR",
+  ENCOLADO: "Encolada (DVR recibida)",
+  EN_REVISION: "En revisión",
+  TERMINADO: "Terminada",
+};
+
+// Traduce un valor crudo de NovedadEvento (campo + valor) a algo legible --
+// única fuente de verdad para esa traducción, reusada tanto por
+// descripcionEvento (pantalla) como por el Excel (hoja "Historial
+// detallado"), para que ambos digan exactamente lo mismo.
+function valorHumanoEvento(campo, valor) {
+  if (valor === null || valor === undefined || valor === "") return "—";
+  if (campo === "estado_dd") return ESTADO_DD_LABELS[valor] || valor;
+  if (campo === "fecha_salida_dvr") return formatFecha(valor);
+  return valor;
+}
+
+// Frase específica por campo en vez del genérico "cambió X de A a B" --
+// mismo espíritu que el resto de este rediseño: que cada fila de la
+// bitácora se lea como una oración, no como un diff de campos.
+function descripcionEvento(ev) {
+  const usuario = ev.usuario || "Sistema";
+  switch (ev.campo) {
+    case "estado_dd":
+      return <>{usuario} avanzó el estado a <b style={{ color: "var(--text-primary)" }}>{valorHumanoEvento("estado_dd", ev.valor_nuevo)}</b></>;
+    case "respuesta_novedad":
+      return <>{usuario} registró la decisión: <b style={{ color: "var(--text-primary)" }}>{ev.valor_nuevo || "—"}</b></>;
+    case "dispositivo_dvr":
+      return <>{usuario} asignó el dispositivo <b style={{ color: "var(--text-primary)" }}>{ev.valor_nuevo || "—"}</b></>;
+    case "fecha_salida_dvr":
+      return <>{usuario} registró la salida de la DVR el <b style={{ color: "var(--text-primary)" }}>{valorHumanoEvento("fecha_salida_dvr", ev.valor_nuevo)}</b></>;
+    case "analista":
+      return <>{usuario} reasignó el caso de <b style={{ color: "var(--text-primary)" }}>{ev.valor_anterior || "—"}</b> a <b style={{ color: "var(--text-primary)" }}>{ev.valor_nuevo || "—"}</b></>;
+    case "respuesta_cliente":
+      return <>El cliente respondió: <b style={{ color: "var(--text-primary)" }}>{ev.valor_nuevo || "—"}</b></>;
+    default:
+      return <>{usuario} cambió <b style={{ color: "var(--text-primary)" }}>{TRAZA_LABELS[ev.campo] || ev.campo}</b> de "{ev.valor_anterior || "—"}" a "{ev.valor_nuevo || "—"}"</>;
+  }
+}
+
+// ─── Rendimiento por etapa ───────────────────────────────────────────────
+// A diferencia de la bitácora de abajo (que muestra el tiempo entre
+// eventos consecutivos, cualquiera que hayan sido), esto mide tramos fijos
+// y específicos usando las fechas dedicadas que ya guarda el backend por
+// etapa (fecha_recepcion_dd, fecha_ingreso_dvr, fecha_inicio_revision,
+// fecha_fin_revision...) -- lo que realmente sirve para medir rendimiento,
+// porque no depende de qué otro campo se haya tocado de por medio (ej. una
+// reasignación de analista no rompe el cálculo del tramo de revisión).
+const ETAPAS_RENDIMIENTO = [
+  { key: "creacion", label: "Registrada", getFecha: (n) => n.fecha_creacion },
+  { key: "recepcion_dd", label: "DVR recibida (encolada)", getFecha: (n) => n.fecha_recepcion_dd },
+  { key: "ingreso_dvr", label: "Ingreso de la DVR a revisión", getFecha: (n) => n.fecha_ingreso_dvr },
+  { key: "inicio_revision", label: "Inicio de revisión", getFecha: (n) => n.fecha_inicio_revision },
+  { key: "fin_revision", label: "Decisión registrada", getFecha: (n) => n.fecha_fin_revision },
+  { key: "informe", label: "Informe generado", getFecha: (n) => n.informe?.fecha_creacion },
+  { key: "salida_dvr", label: "Salida de la DVR", getFecha: (n) => n.fecha_salida_dvr },
+  { key: "respuesta_cliente", label: "Respuesta del cliente", getFecha: (n) => n.fecha_respuesta_cliente },
+];
+
+// Arma los tramos saltando etapas que todavía no ocurrieron (para que el
+// tramo siguiente se mida contra la última fecha real, no contra un hueco
+// vacío) -- el primer tramo (creación -> recepción DD) reusa el nivel que
+// ya calcula el backend (novedad.nivel_espera_dd) en vez de recalcularlo,
+// porque esa espera depende de cuándo llega la DVR física, con su propio
+// umbral en días; el resto usa nivelDemora (horas) como el resto de la página.
+function construirTramosRendimiento(novedad) {
+  const etapas = ETAPAS_RENDIMIENTO.map((e) => ({ ...e, fecha: e.getFecha(novedad) || null }));
+  const tramos = [];
+  let anterior = null;
+  for (const etapa of etapas) {
+    if (!etapa.fecha) {
+      tramos.push({ ...etapa, alcanzada: false, deltaMs: null, nivel: null });
+      continue;
+    }
+    let deltaMs = null;
+    let nivel = null;
+    if (anterior) {
+      deltaMs = new Date(etapa.fecha) - new Date(anterior.fecha);
+      nivel = anterior.key === "creacion"
+        ? (novedad.nivel_espera_dd || nivelDemora(deltaMs))
+        : nivelDemora(deltaMs);
+    }
+    tramos.push({ ...etapa, alcanzada: true, deltaMs, nivel });
+    anterior = etapa;
+  }
+  return tramos;
+}
 
 const COLUMNAS_EXPORT = [
   { key: "fecha", label: "Fecha" },
@@ -367,29 +801,178 @@ const NIVEL_FONT_XLSX = {
   alerta: "FF991B1B",
   atencion: "FF92400E",
 };
+const NIVEL_LABEL = { alerta: "Alerta", atencion: "Atención", normal: "Normal" };
 
-async function exportarTrazabilidadXLSX(eventosConDelta, columnasVisibles, novedad) {
-  const columnas = COLUMNAS_EXPORT.filter((c) => columnasVisibles[c.key]);
-  const codigoNovedad = novedad.codigo_novedad || "novedad";
+function bordeSuave(celda) {
+  celda.border = {
+    top: { style: "hair", color: { argb: "FFE2E8F0" } },
+    bottom: { style: "hair", color: { argb: "FFE2E8F0" } },
+  };
+}
 
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Colfenix GPS";
-  workbook.created = new Date();
+// --- Hoja 1: ficha del caso — todo lo que define a la novedad, agrupado
+// por bloque temático (identificación, SLA, decisión, informe, cliente...).
+// Es lo primero que se ve al abrir el archivo, para no tener que ir a buscar
+// el contexto del caso en otro sistema mientras se lee el resto del reporte.
+function construirFilasResumen(novedad) {
+  const filas = [];
+  const seccion = (titulo) => filas.push({ tipo: "seccion", titulo });
+  const dato = (label, valor) => filas.push({ tipo: "dato", label, valor: (valor ?? "") === "" ? "—" : valor });
 
-  const hoja = workbook.addWorksheet("Trazabilidad", {
-    views: [{ state: "frozen", ySplit: 5 }],
+  seccion("Identificación");
+  dato("Código", novedad.codigo_novedad);
+  dato("Cliente", novedad.cliente);
+  dato("Vehículo", [novedad.vehiculo, novedad.numero_interno].filter(Boolean).join(" · "));
+  dato("Grupo flota", novedad.grupo_flota);
+  dato("Conductor", novedad.conductor);
+  dato("Ruta", novedad.ruta);
+  dato("Analista asignado", novedad.analista);
+
+  seccion("Informe solicitado");
+  dato("Tipo de informe", novedad.tipo_informe);
+  dato("Categoría", novedad.categoria_informe);
+  dato("Prioridad", novedad.nivel_prioridad_display);
+  dato("Fecha de la novedad", formatFecha(novedad.fecha_novedad));
+  dato("Fecha de solicitud", formatFecha(novedad.fecha_solicitud));
+
+  seccion("Estado actual");
+  dato("Estado DD", ESTADO_DD_LABELS[novedad.estado_dd] || novedad.estado_dd);
+  dato("Estado de la novedad", novedad.estado_novedad_display);
+  dato("Dispositivo DVR", novedad.dispositivo_dvr);
+
+  seccion("SLA de revisión (ENCOLADO → TERMINADO)");
+  dato("Límite pactado", novedad.sla_horas != null ? formatDuracionLarga(novedad.sla_horas) : "Sin límite definido");
+  dato("Tiempo transcurrido", novedad.sla_horas_transcurridas != null ? formatDuracionLarga(novedad.sla_horas_transcurridas) : "—");
+  dato("Estado del SLA", novedad.sla_estado_display);
+
+  seccion("Espera de la DVR (creación → recepción)");
+  dato("Tiempo de espera", novedad.horas_espera_dd != null ? formatDuracionLarga(novedad.horas_espera_dd) : "—");
+  dato("Nivel", NIVEL_LABEL[novedad.nivel_espera_dd] || novedad.nivel_espera_dd);
+
+  seccion("Decisión");
+  dato("Resultado", novedad.respuesta_novedad || "Sin decisión todavía");
+  dato("Motivo", novedad.respuesta_novedad === "Positiva" ? novedad.motivo_positivo : novedad.motivo_negativo);
+  dato("Detalle del motivo", novedad.respuesta_novedad === "Positiva" ? novedad.detalle_motivo_positivo : novedad.detalle_motivo_negativo);
+
+  seccion("Informe generado");
+  dato("Código del informe", novedad.informe?.codigo);
+  dato("Resultado", novedad.informe?.resultado);
+  dato("Fecha de generación", novedad.informe ? formatFechaHora(novedad.informe.fecha_creacion) : "Aún no se ha generado");
+
+  seccion("Cierre con el cliente");
+  dato("Salida de la DVR", novedad.fecha_salida_dvr ? formatFecha(novedad.fecha_salida_dvr) : "—");
+  dato("Respuesta del cliente", novedad.respuesta_cliente === "Conforme" ? "Conforme" : novedad.respuesta_cliente === "No_conforme" ? "No conforme" : "Sin responder todavía");
+  dato("Comentario del cliente", novedad.comentario_cliente);
+  dato("Fecha de respuesta", novedad.fecha_respuesta_cliente ? formatFechaHora(novedad.fecha_respuesta_cliente) : "—");
+  dato("Registrada por (cliente)", novedad.respondido_por_cliente);
+
+  return filas;
+}
+
+function escribirHojaResumen(workbook, novedad, colorArgb, titulo) {
+  const hoja = workbook.addWorksheet("Resumen del caso");
+  hoja.columns = [{ width: 26 }, { width: 52 }];
+
+  hoja.mergeCells(1, 1, 1, 2);
+  const celdaTitulo = hoja.getCell(1, 1);
+  celdaTitulo.value = titulo || `Reporte de la novedad — ${novedad.codigo_novedad || ""}`;
+  celdaTitulo.font = { bold: true, size: 14, color: { argb: "FF0F172A" } };
+
+  hoja.getCell(2, 1).value = `Exportado: ${new Date().toLocaleString("es-CO")}`;
+  hoja.getCell(2, 1).font = { size: 9.5, italic: true, color: { argb: "FF94A3B8" } };
+
+  let fila = 4;
+  for (const item of construirFilasResumen(novedad)) {
+    if (item.tipo === "seccion") {
+      hoja.mergeCells(fila, 1, fila, 2);
+      const celda = hoja.getCell(fila, 1);
+      celda.value = item.titulo;
+      celda.font = { bold: true, size: 11, color: { argb: "FFFFFFFF" } };
+      celda.fill = { type: "pattern", pattern: "solid", fgColor: { argb: colorArgb } };
+      celda.alignment = { vertical: "middle" };
+      hoja.getRow(fila).height = 19;
+    } else {
+      const celdaLabel = hoja.getCell(fila, 1);
+      celdaLabel.value = item.label;
+      celdaLabel.font = { bold: true, color: { argb: "FF475569" }, size: 10.5 };
+      const celdaValor = hoja.getCell(fila, 2);
+      celdaValor.value = item.valor;
+      celdaValor.alignment = { wrapText: true, vertical: "middle" };
+      bordeSuave(celdaLabel);
+      bordeSuave(celdaValor);
+    }
+    fila += 1;
+  }
+}
+
+// --- Hoja 2: mismos tramos que se ven en pantalla en "Rendimiento por
+// etapa" (ver construirTramosRendimiento) -- fechas dedicadas por etapa, no
+// inferidas del log crudo.
+function escribirHojaRendimiento(workbook, novedad, tramos, colorArgb) {
+  const columnas = [
+    { key: "etapa", label: "Etapa", width: 34 },
+    { key: "fecha", label: "Fecha", width: 20 },
+    { key: "estado", label: "Estado", width: 14 },
+    { key: "duracion", label: "Duración del tramo", width: 26 },
+  ];
+  const hoja = workbook.addWorksheet("Rendimiento por etapa", { views: [{ state: "frozen", ySplit: 4 }] });
+  hoja.columns = columnas.map((c) => ({ key: c.key, width: c.width }));
+
+  hoja.mergeCells(1, 1, 1, columnas.length);
+  hoja.getCell(1, 1).value = `Rendimiento por etapa — ${novedad.codigo_novedad || ""}`;
+  hoja.getCell(1, 1).font = { bold: true, size: 14, color: { argb: "FF0F172A" } };
+
+  const alcanzadas = tramos.filter((t) => t.alcanzada).length;
+  hoja.mergeCells(2, 1, 2, columnas.length);
+  hoja.getCell(2, 1).value = `Etapas alcanzadas: ${alcanzadas} de ${tramos.length}`;
+  hoja.getCell(2, 1).font = { size: 10.5, color: { argb: "FF475569" } };
+
+  const filaEncabezado = hoja.getRow(4);
+  columnas.forEach((c, i) => {
+    const celda = filaEncabezado.getCell(i + 1);
+    celda.value = c.label;
+    celda.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    celda.fill = { type: "pattern", pattern: "solid", fgColor: { argb: colorArgb } };
+    celda.border = { bottom: { style: "thin", color: { argb: "FF2563EB" } } };
   });
+  filaEncabezado.height = 20;
+
+  tramos.forEach((t) => {
+    const fila = hoja.addRow({
+      etapa: t.label,
+      fecha: t.alcanzada ? new Date(t.fecha) : "Pendiente",
+      estado: t.alcanzada ? "Completada" : "Pendiente",
+      duracion: t.deltaMs != null ? formatDuracionLarga(t.deltaMs / 3_600_000) : "—",
+    });
+    fila.eachCell((celda) => bordeSuave(celda));
+    if (t.alcanzada) fila.getCell(2).numFmt = "dd/mm/yyyy hh:mm";
+    if (t.nivel && NIVEL_FILL_XLSX[t.nivel]) {
+      fila.eachCell((celda) => {
+        celda.fill = { type: "pattern", pattern: "solid", fgColor: { argb: NIVEL_FILL_XLSX[t.nivel] } };
+        celda.font = { ...(celda.font || {}), color: { argb: NIVEL_FONT_XLSX[t.nivel] } };
+      });
+    } else if (!t.alcanzada) {
+      fila.eachCell((celda) => { celda.font = { ...(celda.font || {}), italic: true, color: { argb: "FF94A3B8" } }; });
+    }
+  });
+}
+
+// --- Hoja 3: el log crudo de NovedadEvento, con los mismos valores
+// traducidos (valorHumanoEvento) que ya usa la pantalla -- columnas y rango
+// de fechas configurables desde el modal.
+function escribirHojaHistorial(workbook, novedad, eventosConDelta, columnasVisibles, colorArgb, tituloBase) {
+  const columnas = COLUMNAS_EXPORT.filter((c) => columnasVisibles[c.key]);
+  const hoja = workbook.addWorksheet("Historial detallado", { views: [{ state: "frozen", ySplit: 5 }] });
   hoja.columns = columnas.map((c) => ({ key: c.key, width: COLUMNA_XLSX[c.key]?.width || 18 }));
 
-  // --- Bloque de encabezado (título + metadata de la novedad) ---
   hoja.mergeCells(1, 1, 1, columnas.length);
   const celdaTitulo = hoja.getCell(1, 1);
-  celdaTitulo.value = `Trazabilidad — ${codigoNovedad}`;
+  celdaTitulo.value = tituloBase ? `${tituloBase} — Historial detallado` : `Historial detallado — ${novedad.codigo_novedad || ""}`;
   celdaTitulo.font = { bold: true, size: 14, color: { argb: "FF0F172A" } };
 
   hoja.mergeCells(2, 1, 2, columnas.length);
   const celdaMeta = hoja.getCell(2, 1);
-  celdaMeta.value = `Cliente: ${novedad.cliente || "—"}   ·   Vehículo: ${novedad.vehiculo || "—"}   ·   Analista: ${novedad.analista || "—"}`;
+  celdaMeta.value = `Cliente: ${novedad.cliente || "—"}   ·   Vehículo: ${[novedad.vehiculo, novedad.numero_interno, novedad.grupo_flota].filter(Boolean).join(" · ") || "—"}   ·   Analista: ${novedad.analista || "—"}`;
   celdaMeta.font = { size: 10.5, color: { argb: "FF475569" } };
 
   hoja.mergeCells(3, 1, 3, columnas.length);
@@ -397,20 +980,18 @@ async function exportarTrazabilidadXLSX(eventosConDelta, columnasVisibles, noved
   celdaExportado.value = `Exportado: ${new Date().toLocaleString("es-CO")}`;
   celdaExportado.font = { size: 9.5, italic: true, color: { argb: "FF94A3B8" } };
 
-  // --- Encabezado de la tabla ---
   const filaEncabezado = hoja.getRow(5);
   columnas.forEach((c, i) => {
     const celda = filaEncabezado.getCell(i + 1);
     celda.value = c.label;
     celda.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    celda.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F8CFF" } };
+    celda.fill = { type: "pattern", pattern: "solid", fgColor: { argb: colorArgb } };
     celda.alignment = { vertical: "middle", horizontal: "left" };
     celda.border = { bottom: { style: "thin", color: { argb: "FF2563EB" } } };
   });
   filaEncabezado.height = 20;
   hoja.autoFilter = { from: { row: 5, column: 1 }, to: { row: 5, column: columnas.length } };
 
-  // --- Filas de datos ---
   eventosConDelta.forEach((ev) => {
     const fechaObj = new Date(ev.creado);
     const duracionTexto = ev.deltaMs != null
@@ -420,8 +1001,8 @@ async function exportarTrazabilidadXLSX(eventosConDelta, columnasVisibles, noved
       fecha: fechaObj,
       hora: fechaObj.toLocaleTimeString("es-CO", { hour12: false }),
       campo: TRAZA_LABELS[ev.campo] || ev.campo,
-      valor_anterior: ev.valor_anterior || "—",
-      valor_nuevo: ev.valor_nuevo || "—",
+      valor_anterior: valorHumanoEvento(ev.campo, ev.valor_anterior),
+      valor_nuevo: valorHumanoEvento(ev.campo, ev.valor_nuevo),
       usuario: ev.usuario || "Sistema",
       duracion: duracionTexto,
     };
@@ -429,10 +1010,7 @@ async function exportarTrazabilidadXLSX(eventosConDelta, columnasVisibles, noved
     const fila = hoja.addRow(columnas.map((c) => valores[c.key]));
     fila.eachCell((celda, colNumero) => {
       const clave = columnas[colNumero - 1].key;
-      celda.border = {
-        top: { style: "hair", color: { argb: "FFE2E8F0" } },
-        bottom: { style: "hair", color: { argb: "FFE2E8F0" } },
-      };
+      bordeSuave(celda);
       if (clave === "fecha") celda.numFmt = "dd/mm/yyyy";
       // Resalta la fila igual que el punto de color en la línea de tiempo en
       // pantalla: alerta (rojo) / atención (ámbar) cuando un tramo tardó más
@@ -443,60 +1021,206 @@ async function exportarTrazabilidadXLSX(eventosConDelta, columnasVisibles, noved
       }
     });
   });
+}
+
+// Reporte completo de la novedad: hasta 3 hojas (Resumen del caso,
+// Rendimiento por etapa, Historial detallado), cada una activable desde el
+// modal -- "todo lo que pasó en esa novedad", no solo el log de cambios.
+async function exportarReporteNovedadXLSX(novedad, tramos, eventosConDelta, columnasHistorial, {
+  titulo, colorHex = "#4F8CFF",
+  incluirResumen = true, incluirRendimiento = true, incluirHistorial = true,
+} = {}) {
+  const codigoNovedad = novedad.codigo_novedad || "novedad";
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Colfenix GPS";
+  workbook.created = new Date();
+  const colorArgb = hexToArgb(colorHex);
+
+  if (incluirResumen) escribirHojaResumen(workbook, novedad, colorArgb, titulo);
+  if (incluirRendimiento) escribirHojaRendimiento(workbook, novedad, tramos, colorArgb);
+  if (incluirHistorial) escribirHojaHistorial(workbook, novedad, eventosConDelta, columnasHistorial, colorArgb, titulo);
 
   const buffer = await workbook.xlsx.writeBuffer();
   const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   const url = URL.createObjectURL(blob);
   const enlace = document.createElement("a");
   enlace.href = url;
-  enlace.download = `trazabilidad_${codigoNovedad}.xlsx`;
+  enlace.download = `reporte_${codigoNovedad}.xlsx`;
   document.body.appendChild(enlace);
   enlace.click();
   document.body.removeChild(enlace);
   URL.revokeObjectURL(url);
 }
 
-function SelectorColumnasExport({ visibles, onToggle }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+// Modal de "Configurar exportación" para la Trazabilidad de una novedad --
+// mismo patrón (rango de fechas, checklist de columnas, título/color de
+// encabezado) que ya usan las exportaciones de Novedades
+// (components/DynamicTable/DynamicTable.jsx) y Métricas de analistas
+// (Administracion/MetricasAnalistas.jsx). Acá el "cliente" no es
+// seleccionable -- la trazabilidad es siempre de una sola novedad, así que
+// solo se muestra de forma informativa.
+function TrazabilidadExportModal({ eventos, novedad, tramos, onClose }) {
+  const [fechaDesde, setFechaDesde] = useState("");
+  const [fechaHasta, setFechaHasta] = useState("");
+  const [columnasVisibles, setColumnasVisibles] = useState(() =>
+    Object.fromEntries(COLUMNAS_EXPORT.map((c) => [c.key, true]))
+  );
+  const [incluirResumen, setIncluirResumen] = useState(true);
+  const [incluirRendimiento, setIncluirRendimiento] = useState(true);
+  const [incluirHistorial, setIncluirHistorial] = useState(true);
+  const [titulo, setTitulo] = useState(`Reporte de la novedad — ${novedad.codigo_novedad || ""}`);
+  const [colorHex, setColorHex] = useState("#4F8CFF");
+  const [exportando, setExportando] = useState(false);
 
-  useEffect(() => {
-    function handler(e) {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+  const toggleColumna = (key) => setColumnasVisibles((prev) => ({ ...prev, [key]: !prev[key] }));
+  const columnasElegidas = COLUMNAS_EXPORT.filter((c) => columnasVisibles[c.key]);
+
+  const eventosEnRango = useMemo(() => eventos.filter((ev) => {
+    if (!fechaDesde && !fechaHasta) return true;
+    const fechaEvento = new Date(ev.creado).toISOString().slice(0, 10);
+    if (fechaDesde && fechaEvento < fechaDesde) return false;
+    if (fechaHasta && fechaEvento > fechaHasta) return false;
+    return true;
+  }), [eventos, fechaDesde, fechaHasta]);
+
+  const historialListo = incluirHistorial && columnasElegidas.length > 0 && eventosEnRango.length > 0;
+  const hojasActivas = (incluirResumen ? 1 : 0) + (incluirRendimiento ? 1 : 0) + (historialListo ? 1 : 0);
+
+  const handleExportar = async () => {
+    setExportando(true);
+    try {
+      await exportarReporteNovedadXLSX(novedad, tramos, eventosEnRango, columnasVisibles, {
+        titulo: titulo.trim(),
+        colorHex,
+        incluirResumen,
+        incluirRendimiento,
+        incluirHistorial: historialListo,
+      });
+      onClose();
+    } finally {
+      setExportando(false);
     }
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
+  };
 
   return (
-    <div ref={ref} style={{ position: "relative" }}>
-      <button className="btn btn-sm btn-secondary" onClick={() => setOpen((o) => !o)}>
-        <SlidersHorizontal size={12} /> Columnas
-      </button>
-      {open && (
+    <DrawerPanel
+      icon={<Download size={18} />}
+      title="Configurar exportación"
+      subtitle={`${novedad.codigo_novedad || ""} · reporte completo de la novedad`}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
+          <button
+            className="btn btn-primary"
+            onClick={handleExportar}
+            disabled={exportando || hojasActivas === 0}
+          >
+            {exportando ? "Generando..." : `Exportar (${hojasActivas} ${hojasActivas === 1 ? "hoja" : "hojas"})`}
+          </button>
+        </>
+      }
+    >
+      <div className="form-group">
+        <label className="form-label">Cliente</label>
         <div style={{
-          position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 50,
-          background: "var(--bg-card)", border: "1px solid var(--border)",
-          borderRadius: "var(--radius-md)", padding: "8px 0", minWidth: 230,
-          boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+          padding: "8px 12px", borderRadius: "var(--radius-sm)",
+          background: "var(--accent-glow)", color: "var(--accent-primary)",
+          fontSize: 13, fontWeight: 600,
         }}>
-          {COLUMNAS_EXPORT.map((col) => (
-            <label key={col.key} style={{
-              display: "flex", alignItems: "center", gap: 10, padding: "6px 14px", cursor: "pointer",
-              background: visibles[col.key] ? "var(--accent-glow)" : "transparent",
-            }}>
-              <input
-                type="checkbox"
-                checked={!!visibles[col.key]}
-                onChange={() => onToggle(col.key)}
-                style={{ accentColor: "var(--accent-primary)", width: 14, height: 14 }}
-              />
-              <span style={{ fontSize: 13, color: "var(--text-primary)" }}>{col.label}</span>
-            </label>
-          ))}
+          {novedad.cliente || "—"}
+        </div>
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">Secciones a incluir</label>
+        <p style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: -4, marginBottom: 8 }}>
+          Cada una sale en su propia hoja del mismo archivo — "todo lo que pasó en esta novedad" en un solo reporte.
+        </p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={incluirResumen} onChange={(e) => setIncluirResumen(e.target.checked)}
+              style={{ accentColor: "var(--accent-primary)", width: 14, height: 14 }} />
+            <span style={{ fontSize: 13, color: "var(--text-primary)" }}>Resumen del caso <span style={{ color: "var(--text-muted)" }}>— ficha completa: identificación, SLA, decisión, informe, cliente</span></span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={incluirRendimiento} onChange={(e) => setIncluirRendimiento(e.target.checked)}
+              style={{ accentColor: "var(--accent-primary)", width: 14, height: 14 }} />
+            <span style={{ fontSize: 13, color: "var(--text-primary)" }}>Rendimiento por etapa <span style={{ color: "var(--text-muted)" }}>— duración real de cada tramo</span></span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={incluirHistorial} onChange={(e) => setIncluirHistorial(e.target.checked)}
+              style={{ accentColor: "var(--accent-primary)", width: 14, height: 14 }} />
+            <span style={{ fontSize: 13, color: "var(--text-primary)" }}>Historial detallado <span style={{ color: "var(--text-muted)" }}>— log completo de cambios, campo por campo</span></span>
+          </label>
+        </div>
+      </div>
+
+      {incluirHistorial && (
+        <div className="form-group">
+          <label className="form-label">Rango de fechas del historial (fecha del evento)</label>
+          <div style={{ display: "flex", gap: 10 }}>
+            <input type="date" className="form-input" value={fechaDesde} onChange={(e) => setFechaDesde(e.target.value)} />
+            <input type="date" className="form-input" value={fechaHasta} onChange={(e) => setFechaHasta(e.target.value)} />
+          </div>
+          <p style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 6 }}>
+            {fechaDesde || fechaHasta
+              ? `Del ${fechaDesde ? formatFechaCortaISO(fechaDesde) : "inicio"} al ${fechaHasta ? formatFechaCortaISO(fechaHasta) : "hoy"}. Solo acota la hoja de historial — el resumen y el rendimiento por etapa siempre salen completos.`
+              : "Déjalo vacío para exportar todo el historial. Solo acota esta hoja, no el resumen ni el rendimiento por etapa."}
+          </p>
         </div>
       )}
-    </div>
+
+      <div className="form-group">
+        <label className="form-label">Configuración del encabezado</label>
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+          <div style={{ flex: 1 }}>
+            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Título</span>
+            <input type="text" className="form-input" value={titulo} onChange={(e) => setTitulo(e.target.value)} />
+          </div>
+          <div>
+            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Color</span>
+            <input
+              type="color"
+              value={colorHex}
+              onChange={(e) => setColorHex(e.target.value)}
+              style={{
+                display: "block", width: 44, height: 34, padding: 2,
+                border: "1px solid var(--border)", borderRadius: "var(--radius-sm)",
+                background: "var(--bg-surface)", cursor: "pointer",
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {incluirHistorial && (
+        <div className="form-group">
+          <label className="form-label">Columnas del historial detallado ({columnasElegidas.length})</label>
+          <div style={{
+            maxHeight: 220, overflowY: "auto", marginTop: 8,
+            border: "1px solid var(--border)", borderRadius: "var(--radius-sm)",
+          }}>
+            {COLUMNAS_EXPORT.map((col) => (
+              <label key={col.key} style={{
+                display: "flex", alignItems: "center", gap: 10,
+                padding: "7px 12px", cursor: "pointer",
+                background: columnasVisibles[col.key] ? "var(--accent-glow)" : "transparent",
+                borderBottom: "1px solid var(--border)",
+              }}>
+                <input
+                  type="checkbox"
+                  checked={!!columnasVisibles[col.key]}
+                  onChange={() => toggleColumna(col.key)}
+                  style={{ accentColor: "var(--accent-primary)", width: 14, height: 14 }}
+                />
+                <span style={{ fontSize: 13, color: "var(--text-primary)" }}>{col.label}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+    </DrawerPanel>
   );
 }
 
@@ -511,13 +1235,45 @@ const NIVEL_BG = {
   normal: "var(--bg-surface)",
 };
 
-function Trazabilidad({ novedad, eventos, puedeExportar }) {
-  const [columnasVisibles, setColumnasVisibles] = useState(() =>
-    Object.fromEntries(COLUMNAS_EXPORT.map((c) => [c.key, true]))
+// Solo lectura para el staff: la respuesta del cliente se registra desde el
+// portal (ClienteResponderNovedad), nunca desde esta pantalla -- acá solo se
+// muestra si ya existe.
+function ClienteRespuestaCard({ novedad }) {
+  if (!novedad.respuesta_cliente) {
+    return (
+      <div className="card" style={{ display: "flex", alignItems: "center", gap: 10, opacity: 0.6 }}>
+        <User size={18} color="var(--text-muted)" />
+        <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>El cliente aún no ha respondido.</span>
+      </div>
+    );
+  }
+  const conforme = novedad.respuesta_cliente === "Conforme";
+  return (
+    <div className="card">
+      <div className="card-header"><span className="card-title">Respuesta del cliente</span></div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: novedad.comentario_cliente ? 8 : 0 }}>
+        <span
+          className="badge"
+          style={{
+            background: conforme ? "var(--accent-success-soft)" : "var(--accent-danger-soft)",
+            color: conforme ? "var(--accent-success)" : "var(--accent-danger)",
+          }}
+        >
+          {conforme ? "Conforme" : "No conforme"}
+        </span>
+        <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+          {formatFechaHora(novedad.fecha_respuesta_cliente)} · {novedad.respondido_por_cliente}
+        </span>
+      </div>
+      {novedad.comentario_cliente && (
+        <p style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>{novedad.comentario_cliente}</p>
+      )}
+    </div>
   );
-  const [exportando, setExportando] = useState(false);
+}
 
-  const toggleColumna = (key) => setColumnasVisibles((prev) => ({ ...prev, [key]: !prev[key] }));
+function Trazabilidad({ novedad, eventos, puedeExportar }) {
+  const [exportModalOpen, setExportModalOpen] = useState(false);
 
   // El historial arranca desde que se creó la novedad (no desde el primer
   // cambio de estado_dd): las novedades llegan por correo y se registran de
@@ -546,29 +1302,17 @@ function Trazabilidad({ novedad, eventos, puedeExportar }) {
     return { ...ev, deltaMs, esEsperaDD, nivel: esEsperaDD ? nivelEsperaDD(deltaMs) : nivelDemora(deltaMs) };
   });
 
-  const exportar = async () => {
-    setExportando(true);
-    try {
-      await exportarTrazabilidadXLSX(eventosConDelta, columnasVisibles, novedad);
-    } finally {
-      setExportando(false);
-    }
-  };
+  const tramos = construirTramosRendimiento(novedad);
 
   return (
-    <div className="card">
+    <div id="tour-trazabilidad" className="card">
       <div className="card-header">
         <span className="card-title"><Clock size={15} /> Trazabilidad</span>
         <div style={{ display: "flex", gap: 6 }}>
           {puedeExportar && (
             <>
-              <SelectorColumnasExport visibles={columnasVisibles} onToggle={toggleColumna} />
-              <button
-                className="btn btn-sm btn-secondary"
-                onClick={exportar}
-                disabled={exportando}
-              >
-                <Download size={12} /> {exportando ? "Generando..." : "Exportar Excel"}
+              <button className="btn btn-sm btn-secondary" onClick={() => setExportModalOpen(true)}>
+                <Download size={12} /> Exportar Excel
               </button>
               <button className="btn btn-sm btn-secondary" title="Próximamente">
                 <FileDown size={12} /> Exportar PDF
@@ -576,6 +1320,49 @@ function Trazabilidad({ novedad, eventos, puedeExportar }) {
             </>
           )}
         </div>
+      </div>
+
+      {/* Rendimiento por etapa -- tramos fijos con fecha dedicada de cada
+          uno (no inferidos del log crudo), pensado para medir qué tan
+          rápido avanzó el caso etapa por etapa. */}
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-muted)", marginBottom: 8 }}>
+          Rendimiento por etapa
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 1, border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", overflow: "hidden" }}>
+          {tramos.map((t, i) => (
+            <div key={t.key} style={{
+              display: "flex", alignItems: "center", gap: 10, padding: "8px 12px",
+              background: i % 2 === 0 ? "var(--bg-surface)" : "transparent",
+              opacity: t.alcanzada ? 1 : 0.5,
+            }}>
+              <span style={{
+                width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
+                background: t.alcanzada ? (t.nivel ? NIVEL_COLOR[t.nivel] : "var(--accent-success)") : "var(--text-muted)",
+              }} />
+              <span style={{ fontSize: 12.5, color: "var(--text-primary)", fontWeight: 500, flex: 1, minWidth: 0 }}>
+                {t.label}
+              </span>
+              <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace" }}>
+                {t.alcanzada ? formatFechaHora(t.fecha) : "Pendiente"}
+              </span>
+              {t.deltaMs != null && (
+                <span style={{
+                  display: "inline-flex", alignItems: "center", gap: 3, fontSize: 10.5, fontWeight: 700,
+                  padding: "2px 8px", borderRadius: 99, minWidth: 92, justifyContent: "center",
+                  background: NIVEL_BG[t.nivel] || "var(--accent-glow)", color: NIVEL_COLOR[t.nivel] || "var(--accent-primary)",
+                }}>
+                  {t.nivel === "alerta" && <AlertTriangle size={10} />}
+                  {formatDuracionLarga(t.deltaMs / 3_600_000)}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-muted)", marginBottom: 10 }}>
+        Historial detallado
       </div>
       <div style={{ position: "relative", paddingLeft: 22 }}>
         <span style={{ position: "absolute", left: 4, top: 4, bottom: 4, width: 2, background: "var(--border)" }} />
@@ -608,13 +1395,21 @@ function Trazabilidad({ novedad, eventos, puedeExportar }) {
                 </div>
               ) : (
                 <div style={{ color: "var(--text-secondary)" }}>
-                  {ev.usuario || "Sistema"} cambió <b style={{ color: "var(--text-primary)" }}>{TRAZA_LABELS[ev.campo] || ev.campo}</b> de "{ev.valor_anterior || "—"}" a "{ev.valor_nuevo || "—"}"
+                  {descripcionEvento(ev)}
                 </div>
               )}
             </div>
           ))}
         </div>
       </div>
+      {exportModalOpen && (
+        <TrazabilidadExportModal
+          eventos={eventosConDelta}
+          novedad={novedad}
+          tramos={tramos}
+          onClose={() => setExportModalOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -728,6 +1523,91 @@ function PanelSLA({ novedad }) {
   );
 }
 
+// Acceso directo al flujo de generación de informe (hoy solo existía desde
+// el listado de Novedades) -- misma condición que ya usa NovedadesPage/
+// ModalNovedad para habilitar el botón (estado_novedad ya no es
+// "Pendiente_por_responder", es decir, ya hay una decisión Positiva/Negativa
+// guardada) más el permiso correspondiente.
+// Tarjeta de acceso directo al PDF del informe -- el PDF en sí no se guarda
+// en el servidor (se genera al vuelo en el navegador desde InformesPage con
+// html2pdf), así que esto no es una miniatura real del documento, es un
+// atajo: código + resultado + fecha, que al hacer clic abre ese informe
+// puntual en Informes (donde ya existe el botón "Descargar PDF").
+export function InformePoster({ informe, onAbrir }) {
+  if (!informe) {
+    return (
+      <div className="card" style={{ display: "flex", alignItems: "center", gap: 10, opacity: 0.6 }}>
+        <FileCheck size={20} color="var(--text-muted)" />
+        <span style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Aún no hay informe generado.</span>
+      </div>
+    );
+  }
+  const positivo = informe.resultado === "Positiva";
+  return (
+    <button
+      onClick={onAbrir}
+      className="card"
+      style={{
+        display: "flex", alignItems: "center", gap: 12, textAlign: "left",
+        width: "100%", cursor: "pointer", fontFamily: "inherit",
+      }}
+    >
+      <div style={{
+        width: 40, height: 40, borderRadius: "var(--radius-sm)", flexShrink: 0,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        background: positivo ? "var(--accent-success-soft)" : "var(--accent-danger-soft)",
+        color: positivo ? "var(--accent-success)" : "var(--accent-danger)",
+      }}>
+        <FileCheck size={20} />
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>{informe.codigo}</div>
+        <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+          {informe.resultado} · {formatFechaHora(informe.fecha_creacion)}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// Contenido del paso "Informe generado" -- PasoSeccion ya se encarga de no
+// mostrar esto hasta que la decisión (paso anterior) esté tomada, así que
+// acá solo falta distinguir generado / falta permiso / listo para generar.
+function InformeCard({ novedad, puedeGenerar, onGenerarInforme }) {
+  if (novedad.tiene_informe) {
+    return (
+      <div style={{ fontSize: 13, color: "var(--accent-success)", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+        <CheckCircle2 size={15} /> Informe generado
+      </div>
+    );
+  }
+  return puedeGenerar ? (
+    <button className="btn btn-primary btn-sm" onClick={onGenerarInforme}>
+      <FileCheck size={13} /> Generar informe
+    </button>
+  ) : (
+    <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>Informe pendiente de generar.</div>
+  );
+}
+
+// Fecha manual de salida de la DVR de Colfenix -- PasoSeccion ya no la
+// muestra hasta que exista un informe generado (el backend también lo
+// valida en NovedadDetalleView.post()).
+function SalidaDVR({ fechaSalidaDvr, onFechaSalidaDvr, disabled }) {
+  return (
+    <div className="form-group" style={{ marginBottom: 0 }}>
+      <label className="form-label">Fecha en que la DVR salió de Colfenix</label>
+      <input
+        type="date"
+        className="form-input"
+        value={fechaSalidaDvr || ""}
+        onChange={(e) => onFechaSalidaDvr(e.target.value)}
+        disabled={disabled}
+      />
+    </div>
+  );
+}
+
 function Evidencia({ evidencias, onUpload, subiendo, puedeSubir, onEliminar }) {
   const [eliminandoId, setEliminandoId] = useState(null);
 
@@ -742,8 +1622,10 @@ function Evidencia({ evidencias, onUpload, subiendo, puedeSubir, onEliminar }) {
   };
 
   return (
-    <div className="card">
-      <div className="card-header"><span className="card-title"><Paperclip size={15} /> Evidencia adjunta</span></div>
+    <div>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", margin: "16px 0 10px", display: "flex", alignItems: "center", gap: 6 }}>
+        <Paperclip size={12} /> Evidencia adjunta
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 10, marginBottom: 14 }}>
         {evidencias.map((ev) => (
           <div
@@ -796,15 +1678,18 @@ function Evidencia({ evidencias, onUpload, subiendo, puedeSubir, onEliminar }) {
 export default function NovedadDetallePage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const puedeEditar = tienePermiso(user, "novedades.editar");
   const puedeSubirEvidencia = tienePermiso(user, "novedades.subir_evidencia");
   const puedeExportar = tienePermiso(user, "novedades.exportar");
+  const puedeGenerarInforme = tienePermiso(user, "novedades.generar_informe");
 
   const [novedad, setNovedad] = useState(null);
   const [eventos, setEventos] = useState([]);
   const [motivos, setMotivos] = useState([]);
   const [motivosPositivos, setMotivosPositivos] = useState([]);
+  const [etapasAnalista, setEtapasAnalista] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -817,6 +1702,20 @@ export default function NovedadDetallePage() {
   const [detalle, setDetalle] = useState("");
   const [motivoPositivoId, setMotivoPositivoId] = useState(null);
   const [detallePositivo, setDetallePositivo] = useState("");
+  const [dispositivoDvrId, setDispositivoDvrId] = useState(null);
+  const [fechaSalidaDvr, setFechaSalidaDvr] = useState("");
+
+  // Llega desde una tarjeta "Ver en vivo" de /manual (ver ManualPage.jsx):
+  // navigate(`/novedades/${id}`, { state: { iniciarTour: true, volverA: "/manual" } }).
+  // El `tourIniciadoRef` evita relanzarlo si el componente vuelve a renderizar
+  // mientras el usuario ya está viendo el recorrido.
+  const tourIniciadoRef = useRef(false);
+  useEffect(() => {
+    if (!location.state?.iniciarTour || tourIniciadoRef.current || loading || !novedad) return;
+    tourIniciadoRef.current = true;
+    const volverA = location.state.volverA || "/manual";
+    iniciarTourRevisionDVR(() => navigate(volverA));
+  }, [location.state, loading, novedad, navigate]);
 
   const cargarNovedad = useCallback(async () => {
     const res = await fetch(`${API_BASE}/api/novedades/${id}/`, { credentials: "include" });
@@ -829,6 +1728,8 @@ export default function NovedadDetallePage() {
     setDetalle(data.detalle_motivo_negativo || "");
     setMotivoPositivoId(data.motivo_positivo_id);
     setDetallePositivo(data.detalle_motivo_positivo || "");
+    setDispositivoDvrId(data.dispositivo_dvr_id);
+    setFechaSalidaDvr(data.fecha_salida_dvr || "");
   }, [id]);
 
   const cargarEventos = useCallback(async () => {
@@ -839,7 +1740,7 @@ export default function NovedadDetallePage() {
   // Actualiza solo los campos de SLA/estado_dd en vivo, sin tocar el estado
   // editable local (estadoDD, respuesta, motivoId, detalle) — un refresco
   // completo vía cargarNovedad() revertiría cualquier cambio sin guardar del
-  // analista en el Stepper o la Decisión de revisión.
+  // analista en el flujo de pasos (estado DD, decisión, etc.).
   const actualizarSLA = useCallback(async () => {
     const res = await fetch(`${API_BASE}/api/novedades/${id}/`, { credentials: "include" });
     if (!res.ok) return;
@@ -877,6 +1778,14 @@ export default function NovedadDetallePage() {
             .then((r) => r.json()).then((data) => { if (!cancelado) setMotivos(data); }),
           fetch(`${API_BASE}/api/motivos-positiva/`, { credentials: "include" })
             .then((r) => r.json()).then((data) => { if (!cancelado) setMotivosPositivos(data); }),
+          fetch(`${API_BASE}/api/etapas-flujo/`, { credentials: "include" })
+            .then((r) => (r.ok ? r.json() : []))
+            .then((data) => {
+              if (cancelado) return;
+              setEtapasAnalista(
+                data.filter((e) => e.track === "ANALISTA").sort((a, b) => a.orden - b.orden)
+              );
+            }),
         ]);
       } catch (err) {
         if (!cancelado) setLoadError(err.message);
@@ -888,6 +1797,49 @@ export default function NovedadDetallePage() {
     return () => { cancelado = true; };
   }, [cargarNovedad, cargarEventos]);
 
+  // El flujo avanza solo a partir de las decisiones reales del analista, sin
+  // pasos manuales redundantes: elegir la máquina que llegó ya implica que
+  // la DVR está ENCOLADA, y tomar la decisión (Positiva/Negativa) ya implica
+  // que la revisión TERMINÓ. "En revisión" queda como el único paso manual
+  // real (botón en EnRevision), porque no hay ningún otro dato que lo derive.
+  const avanzarEstadoDD = (minimo) => {
+    setEstadoDD((actual) => (
+      ORDEN_ESTADO_DD.indexOf(actual) < ORDEN_ESTADO_DD.indexOf(minimo) ? minimo : actual
+    ));
+  };
+
+  const handleDispositivoDvr = (valor) => {
+    setDispositivoDvrId(valor);
+    if (valor) avanzarEstadoDD("ENCOLADO");
+  };
+
+  const handleRespuesta = (valor) => {
+    setRespuesta(valor);
+    avanzarEstadoDD("TERMINADO");
+  };
+
+  const marcarEnRevision = () => avanzarEstadoDD("EN_REVISION");
+
+  // Acceso rápido desde el botón de reloj en IngresoDVR -- no pasa por
+  // handleGuardar, se guarda de inmediato contra el dispositivo puntual y
+  // se refresca la novedad para traer el estado de pila ya actualizado.
+  const handleRegistrarCambioPila = async (dispositivoId, fecha) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/dispositivos-dvr/${dispositivoId}/registrar-cambio-pila/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": getCsrfToken() },
+        credentials: "include",
+        body: JSON.stringify({ fecha }),
+      });
+      const resultado = await res.json();
+      if (!resultado.success) throw new Error(resultado.mensaje || "No se pudo registrar el cambio de pila");
+      await cargarNovedad();
+      setToast({ msg: "Cambio de pila registrado", type: "success" });
+    } catch (err) {
+      setToast({ msg: `Error: ${err.message}`, type: "error" });
+    }
+  };
+
   const handleGuardar = async () => {
     setSaving(true);
     try {
@@ -898,6 +1850,8 @@ export default function NovedadDetallePage() {
         body: JSON.stringify({
           estado_dd: estadoDD,
           respuesta_novedad: respuesta,
+          dispositivo_dvr_id: dispositivoDvrId || null,
+          fecha_salida_dvr: fechaSalidaDvr || null,
           motivo_negativo_id: respuesta === "Negativa" ? motivoId : null,
           detalle_motivo_negativo: respuesta === "Negativa" ? detalle : "",
           motivo_positivo_id: respuesta === "Positiva" ? motivoPositivoId : null,
@@ -1003,6 +1957,29 @@ export default function NovedadDetallePage() {
     );
   }
 
+  // El asistente debe reflejar lo que el usuario ya eligió en pantalla, no
+  // solo lo último que se guardó -- si no, el paso siguiente se ve
+  // "bloqueado" hasta apretar Guardar cambios, aunque ya se eligió la
+  // máquina / se marcó en revisión / se tomó la decisión.
+  const novedadEnProgreso = {
+    ...novedad,
+    dispositivo_dvr_id: dispositivoDvrId,
+    estado_dd: estadoDD,
+    respuesta_novedad: respuesta,
+    fecha_salida_dvr: fechaSalidaDvr,
+  };
+  const pasosFlujo = calcularPasosFlujo(novedadEnProgreso, etapasAnalista);
+  const estadoPaso = (i) => (
+    pasosFlujo[i].done ? "hecho" : pasosFlujo.slice(0, i).every((p) => p.done) ? "actual" : "bloqueado"
+  );
+  // Cada PasoSeccion sigue atada a un componente específico (IngresoDVR,
+  // EnRevision, etc.) -- lo único que ahora viene de EtapaFlujo es su
+  // posición/nombre/descripción, para que reordenar o desactivar un paso
+  // desde Configuración de novedades renumere y renombre correctamente el
+  // resto sin tener que tocar este archivo.
+  const indicePorClave = (clave) => pasosFlujo.findIndex((p) => p.key === clave);
+  const pasoPorClave = (clave) => pasosFlujo.find((p) => p.key === clave) || { label: "", descripcion: "" };
+
   return (
     <div className="page-shell">
       <div className="hero-panel compact">
@@ -1023,20 +2000,76 @@ export default function NovedadDetallePage() {
       </div>
 
       <Ficha novedad={novedad} />
-      <Stepper estado={estadoDD} onChange={setEstadoDD} disabled={!puedeEditar} />
+      <FlujoWizard pasos={pasosFlujo} />
+
+      <div className="grid-2" style={{ alignItems: "start" }}>
+        <PasoSeccion
+          numero={indicePorClave("registrada") + 1}
+          titulo={pasoPorClave("registrada").label}
+          descripcion={pasoPorClave("registrada").descripcion}
+          estado="hecho"
+        >
+          <div style={{ fontSize: 12.5, color: "var(--text-muted)" }}>
+            Registrada el {formatFechaHora(novedad.fecha_creacion)} por {novedad.analista}.
+          </div>
+        </PasoSeccion>
+
+        <PasoSeccion
+          numero={indicePorClave("dvr_ingreso") + 1}
+          titulo={pasoPorClave("dvr_ingreso").label}
+          descripcion={pasoPorClave("dvr_ingreso").descripcion}
+          estado={estadoPaso(indicePorClave("dvr_ingreso"))}
+        >
+          <IngresoDVR
+            dispositivoDvrId={dispositivoDvrId}
+            dispositivosDisponibles={novedad.dispositivos_dvr_disponibles || []}
+            onDispositivoDvr={handleDispositivoDvr}
+            fechaIngreso={novedad.fecha_ingreso_dvr}
+            onRegistrarCambioPila={handleRegistrarCambioPila}
+            disabled={!puedeEditar}
+          />
+        </PasoSeccion>
+      </div>
 
       <div className="grid-2" style={{ alignItems: "start" }}>
         <PanelEsperaDD novedad={novedad} />
         <PanelSLA novedad={novedad} />
       </div>
 
-      <div className="grid-2" style={{ alignItems: "start" }}>
+      <PasoSeccion
+        numero={indicePorClave("revision") + 1}
+        titulo={pasoPorClave("revision").label}
+        descripcion={pasoPorClave("revision").descripcion}
+        estado={estadoPaso(indicePorClave("revision"))}
+      >
+        <EnRevision
+          estadoDD={estadoDD}
+          fechaInicioRevision={novedad.fecha_inicio_revision}
+          onMarcarEnRevision={marcarEnRevision}
+          disabled={!puedeEditar}
+        />
+        <Evidencia
+          evidencias={novedad.evidencias || []}
+          onUpload={handleUpload}
+          subiendo={subiendoEvidencia}
+          puedeSubir={puedeSubirEvidencia}
+          onEliminar={handleEliminarEvidencia}
+        />
+      </PasoSeccion>
+
+      <PasoSeccion
+        numero={indicePorClave("decision") + 1}
+        titulo={pasoPorClave("decision").label}
+        descripcion={pasoPorClave("decision").descripcion}
+        estado={estadoPaso(indicePorClave("decision"))}
+      >
         <DecisionRevision
+          novedadId={novedad.id}
           respuesta={respuesta}
           motivoId={motivoId}
           detalle={detalle}
           motivos={motivos}
-          onRespuesta={setRespuesta}
+          onRespuesta={handleRespuesta}
           onMotivo={setMotivoId}
           onDetalle={setDetalle}
           motivosPositivos={motivosPositivos}
@@ -1048,8 +2081,43 @@ export default function NovedadDetallePage() {
           onCrearMotivoPositivo={crearMotivoPositivo}
           disabled={!puedeEditar}
         />
-        <Trazabilidad novedad={novedad} eventos={eventos} puedeExportar={puedeExportar} />
+      </PasoSeccion>
+
+      <PasoSeccion
+        numero={indicePorClave("informe") + 1}
+        titulo={pasoPorClave("informe").label}
+        descripcion={pasoPorClave("informe").descripcion}
+        estado={estadoPaso(indicePorClave("informe"))}
+      >
+        <InformeCard
+          novedad={novedad}
+          puedeGenerar={puedeGenerarInforme}
+          onGenerarInforme={() => navigate("/informes/generar", { state: { novedad } })}
+        />
+      </PasoSeccion>
+
+      <div className="grid-2" style={{ alignItems: "start" }}>
+        <InformePoster
+          informe={novedad.informe}
+          onAbrir={() => navigate("/informes", { state: { abrirInformeId: novedad.informe?.id } })}
+        />
+        <PasoSeccion
+          numero={indicePorClave("salida_dvr") + 1}
+          titulo={pasoPorClave("salida_dvr").label}
+          descripcion={pasoPorClave("salida_dvr").descripcion}
+          estado={estadoPaso(indicePorClave("salida_dvr"))}
+        >
+          <SalidaDVR
+            fechaSalidaDvr={fechaSalidaDvr}
+            onFechaSalidaDvr={setFechaSalidaDvr}
+            disabled={!puedeEditar}
+          />
+        </PasoSeccion>
       </div>
+
+      <ClienteRespuestaCard novedad={novedad} />
+
+      <Trazabilidad novedad={novedad} eventos={eventos} puedeExportar={puedeExportar} />
 
       <Evidencia
         evidencias={novedad.evidencias || []}

@@ -747,6 +747,7 @@ function PaperLogiox({ compartido, onChange, novedad }) {
           <button
             type="button"
             onClick={() => upd("logioxModo", "imagen")}
+            defaultChecked = {true}
             className={`rounded border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${
               modo === "imagen" ? "border-[#333] bg-[#333] text-white" : "border-[#ccc] text-[#888] hover:border-[#999]"
             }`}

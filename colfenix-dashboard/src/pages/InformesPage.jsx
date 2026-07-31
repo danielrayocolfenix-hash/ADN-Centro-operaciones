@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import {
   FileText, Eye, Printer, Download, CheckCircle2, XCircle,
   Building2, Truck, User, Clock, Scale,
@@ -294,6 +295,7 @@ function InformePreviewModal({ informeId, onClose, toast }) {
 }
 
 export default function InformesPage() {
+  const location = useLocation();
   const [informes, setInformes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -306,6 +308,15 @@ export default function InformesPage() {
   const [ordenFecha, setOrdenFecha] = useState("desc");
 
   const mostrarToast = (msg, type) => setToast({ msg, type });
+
+  // Acceso directo desde el "afiche" del informe en NovedadDetallePage
+  // (navigate("/informes", { state: { abrirInformeId } })) -- abre el
+  // drawer de detalle de ese informe puntual apenas se llega a la página.
+  useEffect(() => {
+    if (location.state?.abrirInformeId) {
+      setInformeAbiertoId(location.state.abrirInformeId);
+    }
+  }, [location.state]);
 
   useEffect(() => {
     let cancelado = false;

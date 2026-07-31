@@ -22,6 +22,7 @@ from apps.Informes.models import (
 )
 from apps.Informes.form_schema import FORM_INFORMES
 from apps.novedades.models import Novedades
+from apps.novedades.notificaciones import notificar_informe_generado
 from apps.configuracion.permisos import tiene_permiso
 
 
@@ -88,7 +89,7 @@ class AdminTiposInformeSLA(View):
             tipo = TipoInforme.objects.create(
                 nombre=data["nombre"],
                 categoria_informe_id=data.get("categoria_informe_id") or None,
-                nivel_prioridad=data.get("nivel_prioridad") or "Prioridad_Media",
+                nivel_prioridad=data.get("nivel_prioridad") or "Media",
                 tiempo_maximo_horas=data.get("tiempo_maximo_horas") or None,
             )
             return JsonResponse({
@@ -535,6 +536,8 @@ class GenerarInformeView(View):
                         )
         except Exception as e:
             return JsonResponse({"success": False, "mensaje": f"No se pudo guardar el informe: {e}"}, status=400)
+
+        notificar_informe_generado(informe)
 
         return JsonResponse({
             "success": True,

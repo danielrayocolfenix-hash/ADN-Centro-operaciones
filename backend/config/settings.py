@@ -10,23 +10,27 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
-import os
 from pathlib import Path
+
+import environ
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+env = environ.Env()
+environ.Env.read_env(BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-1+=(n--na46g*v@k5q9mtj+(b_@38ur44*z1qx5@**-vqm&)gu'
+SECRET_KEY = env('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env.bool('DEBUG', default=False)
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '4ggvrj09-8000.use2.devtunnels.ms']
+ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=[])
 
 
 # Application definition
@@ -65,18 +69,10 @@ MIDDLEWARE = [
 ]
 # CORS_ALLOW_ALL_ORIGINS = True
 
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://localhost:3001",   # CRA salta a este puerto si el 3000 ya está en uso
-    "https://4ggvrj09-3000.use2.devtunnels.ms",
-]
+CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[])
 CORS_ALLOW_CREDENTIALS = True
 
-CSRF_TRUSTED_ORIGINS = [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "https://4ggvrj09-3000.use2.devtunnels.ms",
-]
+CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=[])
 
 # El backend es solo API: si el CSRF falla, devolver JSON en vez de la
 # página HTML por defecto de Django (el frontend hace res.json() sobre
@@ -89,7 +85,7 @@ CSRF_FAILURE_VIEW = "config.views.csrf_failure"
 # navegador las envíe entre esos dos hosts. En localhost esto no hace falta
 # porque el puerto no afecta el alcance de las cookies. Se activa solo con
 # DEV_TUNNEL=1 para no tocar el flujo normal de desarrollo local.
-if os.environ.get("DEV_TUNNEL") == "1":
+if env.bool('DEV_TUNNEL', default=False):
     SESSION_COOKIE_SAMESITE = "None"
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SAMESITE = "None"
@@ -121,11 +117,11 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'centro_analisis',
-        'USER': 'postgres',
-        'PASSWORD': 'postgresql12',
-        'HOST': 'localhost',
-        'PORT': '5432',
+        'NAME': env('DB_NAME'),
+        'USER': env('DB_USER'),
+        'PASSWORD': env('DB_PASSWORD'),
+        'HOST': env('DB_HOST'),
+        'PORT': env('DB_PORT'),
     }
 }
 

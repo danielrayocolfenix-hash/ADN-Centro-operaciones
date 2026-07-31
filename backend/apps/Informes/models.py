@@ -344,7 +344,7 @@ class TipoInforme(models.Model):
     nivel_prioridad = models.CharField(
         max_length=50,
         choices=Novedades.NIVEL_PRIORIDAD,
-        default='Prioridad_Media',
+        default='Media',
         help_text='Prioridad que se asignará automáticamente a las novedades que usen este tipo de informe.'
     )
 

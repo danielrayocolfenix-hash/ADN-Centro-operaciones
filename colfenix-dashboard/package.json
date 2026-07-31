@@ -10,6 +10,7 @@
     "@tiptap/react": "^3.27.4",
     "@tiptap/starter-kit": "^3.27.4",
     "date-fns": "^3.6.0",
+    "driver.js": "^1.8.0",
     "exceljs": "^4.4.0",
     "html2pdf.js": "^0.14.0",
     "lucide-react": "^0.383.0",
