@@ -1,8 +1,34 @@
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 
 # Create your models here.
 class UsuariosColfenix(AbstractUser):
+
+    # NUEVO: distingue el personal interno de Colfenix (acceso completo al
+    # dashboard, sujeto al sistema de permisos existente) de un usuario de
+    # portal externo (un contacto de un Cliente, que solo ve/responde sus
+    # propias novedades -- ver apps.novedades.views_portal y
+    # apps.configuracion.permisos.es_cliente_de). No se modela como un
+    # segundo modelo de usuario porque Django solo permite un
+    # AUTH_USER_MODEL por proyecto -- se reutiliza el login/sesión/CSRF ya
+    # existente tal cual.
+    TIPO_CHOICES = [
+        ("STAFF", "Staff interno"),
+        ("CLIENTE", "Cliente"),
+    ]
+
+    tipo = models.CharField(max_length=10, choices=TIPO_CHOICES, default="STAFF")
+
+    # Solo aplica cuando tipo=CLIENTE -- la empresa cuyas novedades este
+    # usuario puede ver/responder desde el portal.
+    cliente = models.ForeignKey(
+        "Cliente.Cliente",
+        on_delete=models.PROTECT,
+        related_name="usuarios_portal",
+        null=True,
+        blank=True,
+    )
 
     # NUEVO: antes "rol" era texto libre sin ningún valor canónico (ya
     # existían usuarios reales con "ANALISTA", "Analista de medios" y "" —
@@ -38,6 +64,16 @@ class UsuariosColfenix(AbstractUser):
 
     class Meta:
        db_table= 'usuarios_colfenix'
+
+    def clean(self):
+        super().clean()
+        if self.tipo == "CLIENTE":
+            if not self.cliente_id:
+                raise ValidationError({"cliente": "Un usuario tipo Cliente debe tener un Cliente asignado."})
+            if self.is_staff:
+                raise ValidationError({"is_staff": "Un usuario tipo Cliente no puede ser staff."})
+        elif self.cliente_id:
+            raise ValidationError({"cliente": "Solo un usuario tipo Cliente puede tener un Cliente asignado."})
 
     def __str__(self):
         return self.get_full_name() or self.username

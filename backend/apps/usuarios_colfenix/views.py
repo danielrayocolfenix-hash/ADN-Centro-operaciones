@@ -28,6 +28,11 @@ def _serializar_usuario(usuario):
         "nombre": usuario.get_full_name() or usuario.username,
         "rol": usuario.rol,
         "is_staff": usuario.is_staff,
+        # tipo=CLIENTE es lo que el frontend usa para decidir si renderiza
+        # el Shell interno o el Portal de cliente -- ver App.jsx.
+        "tipo": usuario.tipo,
+        "cliente_id": usuario.cliente_id,
+        "cliente": usuario.cliente.nombre if usuario.cliente_id else None,
         # Claves de permiso que tiene -- el catálogo completo si es_staff,
         # o su set explícito si no. El frontend hace `permisos.includes(clave)`
         # sin tener que repetir en cada componente la lógica de "is_staff

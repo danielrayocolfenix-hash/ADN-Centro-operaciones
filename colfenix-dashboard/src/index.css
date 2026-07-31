@@ -572,6 +572,13 @@ html, body, #root {
 .data-table tr:hover td { background: var(--bg-hover); color: var(--text-primary); }
 .data-table tr:last-child td { border-bottom: none; }
 
+/* ── Tabla de Novedades: zebra + transición de fila, alcance local a esta
+   vista (DynamicTable solo se usa acá) para no afectar otras tablas
+   .data-table de Administración que no fueron parte de este rediseño ── */
+.novedades-table .data-table tbody tr td { transition: background 0.1s ease; }
+.novedades-table .data-table tbody tr:nth-child(even) td { background: var(--bg-surface); }
+.novedades-table .data-table tbody tr:nth-child(even):hover td { background: var(--bg-hover); }
+
 /* ── BADGES ──────────────────────────────────────────────── */
 .badge {
   display: inline-flex;

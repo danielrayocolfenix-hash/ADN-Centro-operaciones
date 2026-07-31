@@ -43,6 +43,23 @@ export function formatFechaHora(dateStr) {
   });
 }
 
+// Tiempo relativo corto (ej. "hace 4 min", "hace 2 d") para listas donde
+// la fecha exacta importa menos que "qué tan reciente es esto" -- ej. el
+// Centro de notificaciones del portal. Cae a formatFecha() pasada una
+// semana, donde "hace 9 d" deja de ser más útil que la fecha real.
+export function formatFechaRelativa(dateStr) {
+  if (!dateStr) return "—";
+  const diffMs = Date.now() - new Date(dateStr).getTime();
+  const minutos = Math.floor(diffMs / 60000);
+  if (minutos < 1) return "justo ahora";
+  if (minutos < 60) return `hace ${minutos} min`;
+  const horas = Math.floor(minutos / 60);
+  if (horas < 24) return `hace ${horas} h`;
+  const dias = Math.floor(horas / 24);
+  if (dias < 7) return `hace ${dias} d`;
+  return formatFecha(dateStr);
+}
+
 export function getPrioridadColor(prioridad) {
   switch (prioridad) {
     case "Alta": return "#EF4444";
@@ -95,4 +112,54 @@ export function generarIdInforme(informes) {
   const anio = new Date().getFullYear();
   const siguiente = informes.length + 1;
   return `INF-${anio}-${String(siguiente).padStart(3, "0")}`;
+}
+
+// "#4f8cff" -> "FF4F8CFF" (ARGB de ExcelJS: alfa + RGB). Acepta también la
+// forma corta "#48f". Cae al color dado en `fallback` si el input no es un
+// hex válido -- usado por todos los modales de "Configurar exportación"
+// (Novedades, Trazabilidad, Métricas de analistas) para el color de
+// encabezado que elige el usuario.
+export function hexToArgb(hex, fallback = "4F8CFF") {
+  let limpio = String(hex || "").replace("#", "").trim().toUpperCase();
+  if (/^[0-9A-F]{3}$/.test(limpio)) {
+    limpio = limpio.split("").map((c) => c + c).join("");
+  }
+  if (!/^[0-9A-F]{6}$/.test(limpio)) limpio = fallback;
+  return `FF${limpio}`;
+}
+
+// Duración en palabras completas (ej. "1 hora 13 minutos", "2 días 3
+// horas") a partir de una cantidad de horas -- a diferencia de
+// formatDuracionHoras (abreviada: "1h 13m"), esta es la que se usa en las
+// exportaciones a Excel que incluyen el campo SLA, para que el tiempo real
+// transcurrido quede legible en un reporte impreso, no solo en pantalla.
+export function formatDuracionLarga(horas) {
+  if (horas == null) return "—";
+  const totalMin = Math.round(Math.abs(horas) * 60);
+  const dias = Math.floor(totalMin / 1440);
+  const horasResto = Math.floor((totalMin % 1440) / 60);
+  const minutos = totalMin % 60;
+  const partes = [];
+  if (dias > 0) partes.push(`${dias} ${dias === 1 ? "día" : "días"}`);
+  if (horasResto > 0) partes.push(`${horasResto} ${horasResto === 1 ? "hora" : "horas"}`);
+  if (minutos > 0 || partes.length === 0) partes.push(`${minutos} ${minutos === 1 ? "minuto" : "minutos"}`);
+  return partes.join(" ");
+}
+
+// "YYYY-MM-DD" -> "DD/MM/YYYY", para mostrar el rango elegido en los
+// modales de "Configurar exportación" (inputs <input type="date"> ya
+// entregan/reciben ese formato ISO corto).
+export function formatFechaCortaISO(iso) {
+  const [y, m, d] = String(iso || "").split("-");
+  return y && m && d ? `${d}/${m}/${y}` : (iso || "");
+}
+
+// Texto -> slug para nombres de archivo exportados (ej. "Flota La Macarena"
+// -> "flota_la_macarena").
+export function slug(texto) {
+  return String(texto || "")
+    .toLowerCase()
+    .normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }

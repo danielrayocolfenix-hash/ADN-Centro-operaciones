@@ -5,10 +5,11 @@ from .models import UsuariosColfenix, RolUsuario
 
 @admin.register(UsuariosColfenix)
 class UsuariosColfenixAdmin(UserAdmin):
-    list_display = ('username', 'get_full_name', 'rol', 'is_staff', 'is_active')
-    list_filter = UserAdmin.list_filter + ('rol',)
+    list_display = ('username', 'get_full_name', 'rol', 'tipo', 'is_staff', 'is_active')
+    list_filter = UserAdmin.list_filter + ('rol', 'tipo')
     fieldsets = UserAdmin.fieldsets + (
         ('Colfenix', {'fields': ('telefono', 'rol', 'permisos')}),
+        ('Portal de cliente', {'fields': ('tipo', 'cliente')}),
     )
 
 

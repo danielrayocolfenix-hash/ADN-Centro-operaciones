@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   BrowserRouter, Routes, Route, Navigate,
   useNavigate, useLocation,
@@ -18,9 +18,11 @@ import ConfiguracionSLAPage from "./pages/Administracion/ConfiguracionSLA";
 import MetricasAnalistasPage from "./pages/Administracion/MetricasAnalistas";
 import ConfiguracionSitioPage from "./pages/Administracion/ConfiguracionSitio";
 import UsuariosPage from "./pages/Administracion/Usuarios";
+import VistaClientePage from "./pages/Administracion/VistaCliente";
+import VistaClienteDetallePage from "./pages/Administracion/VistaClienteDetalle";
 import ManualPage from "./pages/ManualPage";
 import LoginPage from "./pages/LoginPage";
-import { novedades } from "./data/mockData";
+import PortalShell from "./pages/Portal/PortalShell";
 import { API_BASE } from "./config/api";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { SiteConfigProvider } from "./context/SiteConfigContext";
@@ -52,6 +54,7 @@ function NovedadesRoute() {
   return (
     <NovedadesPage
       onGenerarInforme={(novedad) => navigate("/informes/generar", { state: { novedad } })}
+      onVerInforme={(informeId) => navigate("/informes", { state: { abrirInformeId: informeId } })}
     />
   );
 }
@@ -106,6 +109,23 @@ function SinAccesoPage() {
   );
 }
 
+// Dentro del único RequireAuth de más abajo: un usuario tipo=CLIENTE ve el
+// Portal (su propio layout, sin el Sidebar/Topbar de staff que están
+// construidos alrededor de permisos vista.* que no le aplican); cualquier
+// otro usuario ve el Shell interno de siempre. No duplica RequireAuth ni
+// toca LoginPage.jsx -- "/" simplemente resuelve distinto según user.tipo.
+function AppShellRouter() {
+  const { user } = useAuth();
+  if (user?.tipo === "CLIENTE") {
+    return <PortalShell />;
+  }
+  return (
+    <SiteConfigProvider>
+      <Shell />
+    </SiteConfigProvider>
+  );
+}
+
 function RequireAuth({ children }) {
   const { user, loading } = useAuth();
   const location = useLocation();
@@ -124,9 +144,20 @@ function Shell() {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
 
-  const alertCount = novedades.filter(
-    n => n.prioridad === "Alta" && n.estado !== "Cerrada"
-  ).length;
+  // Antes calculado sobre datos mock (con campos que ni siquiera existen en
+  // la API real) -- ahora sale de /api/novedades/alertas-criticas/count/,
+  // misma fórmula (Prioridad_Alta sin cerrar) que ya usan NovedadesPage y
+  // DashboardPage.
+  const [alertCount, setAlertCount] = useState(0);
+  useEffect(() => {
+    if (!tienePermiso(user, "vista.novedades")) return;
+    let cancelado = false;
+    fetch(`${API_BASE}/api/novedades/alertas-criticas/count/`, { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : { alertas_criticas: 0 }))
+      .then((data) => { if (!cancelado) setAlertCount(data.alertas_criticas || 0); })
+      .catch(() => {});
+    return () => { cancelado = true; };
+  }, [user]);
 
   const page = useMemo(() => pageIdFromPath(location.pathname), [location.pathname]);
 
@@ -139,7 +170,7 @@ function Shell() {
 
   return (
     <div className="app-shell">
-      <Sidebar active={page} onNavigate={handleNavigate} alertCount={alertCount} user={user} />
+      <Sidebar active={page} currentPath={location.pathname} onNavigate={handleNavigate} alertCount={alertCount} user={user} />
       <div className="main-area">
         <Topbar page={page} alertCount={alertCount} user={user} onNavigate={handleNavigate} onLogout={handleLogout} />
         <div className="page-content">
@@ -182,6 +213,12 @@ function Shell() {
             <Route path="/administracion/usuarios" element={
               <Guard user={user} permiso="vista.administracion_usuarios"><UsuariosPage /></Guard>
             } />
+            <Route path="/administracion/vista-cliente" element={
+              <Guard user={user} permiso="vista.administracion_novedades"><VistaClientePage /></Guard>
+            } />
+            <Route path="/administracion/vista-cliente/:id" element={
+              <Guard user={user} permiso="vista.administracion_novedades"><VistaClienteDetallePage /></Guard>
+            } />
             <Route path="/manual" element={<ManualPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
@@ -213,9 +250,7 @@ export default function App() {
             path="/*"
             element={
               <RequireAuth>
-                <SiteConfigProvider>
-                  <Shell />
-                </SiteConfigProvider>
+                <AppShellRouter />
               </RequireAuth>
             }
           />

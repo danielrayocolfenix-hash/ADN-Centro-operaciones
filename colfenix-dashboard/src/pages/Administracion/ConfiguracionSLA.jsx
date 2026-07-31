@@ -4,7 +4,7 @@ import { driver } from "driver.js";
 import "driver.js/dist/driver.css";
 import {
   Clock, Save, Plus, Tag, Power, CheckCircle2, XCircle, Timer,
-  ChevronDown, ChevronUp, Battery, Radio,
+  ChevronDown, ChevronUp, Battery, Radio, SlidersHorizontal,
 } from "lucide-react";
 import { API_BASE } from "../../config/api";
 import { getCsrfToken } from "../../utils/csrf";
@@ -50,6 +50,10 @@ function iniciarTourConfiguracionNovedades(onFinish) {
         element: "#tour-motivos-negativos",
         popover: { title: "Motivos de negativa", description: "Razones por las que una revisión de DVR resulta Negativa, ej. DVR no enciende, sin grabación del día." },
       },
+      {
+        element: "#tour-etapas-flujo",
+        popover: { title: "Etapas del flujo", description: "Nombre, descripción, orden y activación de cada paso del asistente de revisión (analista) y del portal de clientes." },
+      },
     ],
   });
   recorrido.drive();
@@ -94,6 +98,32 @@ function CollapsibleSection({ id, icon, title, subtitle, defaultOpen = true, chi
   );
 }
 
+// Agrupa varias CollapsibleSection bajo un mismo encabezado por lógica de
+// funcionalidad (ej. "Categorías y tipos de informe"), en vez de que todas
+// las tarjetas de la pantalla se vean como una sola lista plana mezclada.
+// El encabezado no es una tarjeta más -- es más liviano a propósito, para
+// que se note que agrupa, no que compite visualmente con las tarjetas.
+function GrupoConfiguracion({ titulo, descripcion, children }) {
+  return (
+    <section style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 2, paddingLeft: 2, borderLeft: "3px solid var(--accent-primary)" }}>
+        <span style={{
+          fontSize: 11.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em",
+          color: "var(--accent-primary)", paddingLeft: 10,
+        }}>
+          {titulo}
+        </span>
+        {descripcion && (
+          <span style={{ fontSize: 12, color: "var(--text-muted)", paddingLeft: 10 }}>{descripcion}</span>
+        )}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {children}
+      </div>
+    </section>
+  );
+}
+
 const DIAS = [
   { key: "lunes", label: "Lunes" },
   { key: "martes", label: "Martes" },
@@ -123,7 +153,7 @@ function PrioridadBadge({ text }) {
   );
 }
 
-function CategoriasCard({ toast, categorias, loading, onCreada }) {
+function CategoriasCard({ toast, categorias, loading, onCreada, defaultOpen }) {
   const [nombre, setNombre] = useState("");
   const [creando, setCreando] = useState(false);
 
@@ -156,6 +186,7 @@ function CategoriasCard({ toast, categorias, loading, onCreada }) {
       icon={<Tag size={15} color="var(--accent-primary)" />}
       title="Categorías de informe"
       subtitle="Agrupan los tipos de informe en el formulario de Registrar novedad"
+      defaultOpen={defaultOpen}
     >
       <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 14 }}>
         Agrupan los tipos de informe en el selector de "Registrar novedad" — ej. "Novedad Específica" agrupando
@@ -191,7 +222,7 @@ function CategoriasCard({ toast, categorias, loading, onCreada }) {
   );
 }
 
-function HorarioLaboralCard({ toast }) {
+function HorarioLaboralCard({ toast, defaultOpen }) {
   const [horario, setHorario] = useState(null);
   const [loading, setLoading] = useState(true);
   const [guardando, setGuardando] = useState(false);
@@ -236,6 +267,7 @@ function HorarioLaboralCard({ toast }) {
       icon={<Clock size={15} color="var(--accent-primary)" />}
       title="Horario laboral"
       subtitle="Cuándo corre el conteo del SLA de revisión"
+      defaultOpen={defaultOpen}
     >
       <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 14 }}>
         Define en qué días y horas corre el conteo de tiempo del SLA de revisión de DVR. Fuera de este horario el
@@ -289,7 +321,7 @@ function HorarioLaboralCard({ toast }) {
 
 const NUEVO_TIPO_VACIO = { nombre: "", categoria_informe_id: "", nivel_prioridad: "Prioridad_Media", tiempo_maximo_horas: "" };
 
-function TiposInformeCard({ toast, categorias }) {
+function TiposInformeCard({ toast, categorias, defaultOpen }) {
   const [tipos, setTipos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [guardandoId, setGuardandoId] = useState(null);
@@ -371,6 +403,7 @@ function TiposInformeCard({ toast, categorias }) {
       icon={<Timer size={15} color="var(--accent-primary)" />}
       title="Tiempo máximo por tipo de informe (SLA)"
       subtitle="Límite de horas hábiles desde ENCOLADO hasta TERMINADO"
+      defaultOpen={defaultOpen}
     >
       <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 14 }}>
         Horas hábiles máximas desde que una novedad entra en <b>ENCOLADO</b> hasta que llega a <b>TERMINADO</b>. Deja
@@ -564,7 +597,7 @@ function VehiculoLookup({ value, onSelect }) {
   );
 }
 
-function CaducidadPilaCard({ toast }) {
+function CaducidadPilaCard({ toast, defaultOpen }) {
   const [meses, setMeses] = useState("");
   const [loading, setLoading] = useState(true);
   const [guardando, setGuardando] = useState(false);
@@ -610,6 +643,7 @@ function CaducidadPilaCard({ toast }) {
       icon={<Battery size={15} color="var(--accent-primary)" />}
       title="Caducidad de pila de la DVR"
       subtitle="Cada cuántos meses debe cambiarse la pila"
+      defaultOpen={defaultOpen}
     >
       <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 14 }}>
         Al elegir en una novedad qué máquina DVR entró a revisión, se avisa cuando su pila está por vencer o ya
@@ -654,7 +688,7 @@ const NUEVO_DISPOSITIVO_VACIO = { vehiculo: null, numero_maquina: 1, marca: "", 
 // patrón de "form-grid + tabla" que TiposInformeCard, con edición inline por
 // fila (marca/serie/fecha) igual que la columna tiempo_maximo_horas de esa
 // misma tarjeta.
-function DispositivosDVRCard({ toast }) {
+function DispositivosDVRCard({ toast, defaultOpen }) {
   const [dispositivos, setDispositivos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [nuevo, setNuevo] = useState(NUEVO_DISPOSITIVO_VACIO);
@@ -742,6 +776,7 @@ function DispositivosDVRCard({ toast }) {
       icon={<Radio size={15} color="var(--accent-primary)" />}
       title="Dispositivos DVR"
       subtitle="Máquina 1 y 2 de cada vehículo, con su último cambio de pila"
+      defaultOpen={defaultOpen}
     >
       <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 14 }}>
         Cada vehículo tiene hasta 2 DVR físicas. Registrarlas acá permite identificar, al revisar una novedad, cuál
@@ -851,10 +886,135 @@ function DispositivosDVRCard({ toast }) {
   );
 }
 
+const TRACK_LABEL = { ANALISTA: "Analista", CLIENTE: "Cliente" };
+
+// A diferencia de DispositivosDVRCard, acá no hay formulario de alta: las
+// etapas son fijas (una por cada clave con criterio de "completado" en
+// apps.novedades.etapas.CRITERIOS_ETAPA, del lado del backend) -- esta
+// tarjeta solo edita metadata (nombre/descripción/orden/activo) de las que
+// ya sembró la migración de datos.
+function EtapasFlujoCard({ toast, defaultOpen }) {
+  const [etapas, setEtapas] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [guardandoId, setGuardandoId] = useState(null);
+
+  const cargar = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/etapas-flujo/`, { credentials: "include" });
+      if (!res.ok) throw new Error(`El servidor respondió ${res.status}`);
+      setEtapas(await res.json());
+    } catch (err) {
+      toast(`Error cargando etapas del flujo: ${err.message}`, "error");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { cargar(); }, []); // eslint-disable-line
+
+  const actualizarCampo = (id, campo, valor) => {
+    setEtapas((es) => es.map((e) => (e.id === id ? { ...e, [campo]: valor } : e)));
+  };
+
+  const guardar = async (etapa) => {
+    setGuardandoId(etapa.id);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/etapas-flujo/${etapa.id}/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-CSRFToken": getCsrfToken() },
+        credentials: "include",
+        body: JSON.stringify({
+          nombre: etapa.nombre,
+          descripcion: etapa.descripcion,
+          orden: Number(etapa.orden),
+          activo: etapa.activo,
+        }),
+      });
+      const resultado = await res.json();
+      if (!resultado.success) throw new Error(resultado.mensaje || "No se pudo guardar");
+      setEtapas((es) => es.map((e) => (e.id === etapa.id ? resultado.etapa : e)));
+      toast(`Etapa "${etapa.nombre}" actualizada`, "success");
+    } catch (err) {
+      toast(`Error: ${err.message}`, "error");
+    } finally {
+      setGuardandoId(null);
+    }
+  };
+
+  return (
+    <CollapsibleSection
+      id="tour-etapas-flujo"
+      icon={<SlidersHorizontal size={15} color="var(--accent-primary)" />}
+      title="Etapas del flujo"
+      subtitle="Nombre, descripción, orden y activación de los pasos del asistente"
+      defaultOpen={defaultOpen}
+    >
+      <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 14 }}>
+        Cada fila es un paso ya existente del flujo de revisión (Analista) o del portal de clientes (Cliente). Puedes
+        renombrarlo, cambiar su descripción, su orden de aparición o desactivarlo — no se pueden crear pasos nuevos
+        desde acá.
+      </p>
+      {loading && <div style={{ color: "var(--text-muted)" }}>Cargando…</div>}
+      {!loading && (
+        <table className="data-table">
+          <thead>
+            <tr><th>Track</th><th>Nombre</th><th>Descripción</th><th>Orden</th><th>Activo</th><th></th></tr>
+          </thead>
+          <tbody>
+            {etapas.map((e) => (
+              <tr key={e.id}>
+                <td>
+                  <span className="badge" style={{ background: "var(--accent-glow)", color: "var(--accent-primary)" }}>
+                    {TRACK_LABEL[e.track] || e.track}
+                  </span>
+                </td>
+                <td>
+                  <input className="form-input" value={e.nombre} onChange={(ev) => actualizarCampo(e.id, "nombre", ev.target.value)} />
+                </td>
+                <td>
+                  <input className="form-input" value={e.descripcion} onChange={(ev) => actualizarCampo(e.id, "descripcion", ev.target.value)} />
+                </td>
+                <td>
+                  <input
+                    type="number"
+                    className="form-input"
+                    style={{ width: 70 }}
+                    value={e.orden}
+                    onChange={(ev) => actualizarCampo(e.id, "orden", ev.target.value)}
+                  />
+                </td>
+                <td>
+                  <input
+                    type="checkbox"
+                    checked={e.activo}
+                    onChange={(ev) => actualizarCampo(e.id, "activo", ev.target.checked)}
+                    style={{ accentColor: "var(--accent-primary)", width: 14, height: 14 }}
+                  />
+                </td>
+                <td>
+                  <button className="btn btn-sm btn-secondary" onClick={() => guardar(e)} disabled={guardandoId === e.id}>
+                    <Save size={12} /> {guardandoId === e.id ? "Guardando..." : "Guardar"}
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {etapas.length === 0 && (
+              <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-muted)", padding: 24 }}>
+                Sin etapas registradas todavía.
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      )}
+    </CollapsibleSection>
+  );
+}
+
 // Catálogo de motivos (Negativa o Positiva, según `endpointBase`) — mismo
 // patrón de crear + tabla + activar/desactivar, parametrizado para no
 // duplicar el componente entre los dos catálogos.
-function MotivosCard({ id, toast, icono, titulo, subtitulo, descripcion, placeholderNombre, endpointBase }) {
+function MotivosCard({ id, toast, icono, titulo, subtitulo, descripcion, placeholderNombre, endpointBase, defaultOpen }) {
   const [motivos, setMotivos] = useState([]);
   const [loading, setLoading] = useState(true);
   const [nombre, setNombre] = useState("");
@@ -917,7 +1077,7 @@ function MotivosCard({ id, toast, icono, titulo, subtitulo, descripcion, placeho
   };
 
   return (
-    <CollapsibleSection id={id} icon={icono} title={titulo} subtitle={subtitulo}>
+    <CollapsibleSection id={id} icon={icono} title={titulo} subtitle={subtitulo} defaultOpen={defaultOpen}>
       <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 14 }}>{descripcion}</p>
       <form onSubmit={crear} style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
         <input
@@ -1018,44 +1178,72 @@ export default function ConfiguracionSLAPage() {
           <div className="hero-eyebrow">Administración · Configuración de novedades</div>
           <h2 className="hero-title">Configuración del flujo de revisión de DVR</h2>
           <p className="hero-text">
-            Cada bloque de abajo es una configuración o situación distinta del formulario de novedades — categorías y
-            tipos de informe, su prioridad y SLA, el horario laboral, y los motivos de positiva/negativa. Puedes
-            contraer los que no estés usando.
+            Agrupado por funcionalidad: categorías y tipos de informe, horario laboral, dispositivos DVR, el flujo del
+            proceso, y los motivos de positiva/negativa. Solo el primer grupo empieza abierto — despliega los demás
+            según lo que necesites.
           </p>
         </div>
       </div>
 
-      <div className="grid-2" style={{ alignItems: "start" }}>
-        <HorarioLaboralCard toast={toast} />
-        <CategoriasCard toast={toast} categorias={categorias} loading={loadingCategorias} onCreada={cargarCategorias} />
-      </div>
-      <TiposInformeCard toast={toast} categorias={categorias} />
+      <GrupoConfiguracion
+        titulo="Categorías y tipos de informe"
+        descripcion="Qué tipos de informe existen, a qué categoría pertenecen y su tiempo máximo de SLA."
+      >
+        <CategoriasCard toast={toast} categorias={categorias} loading={loadingCategorias} onCreada={cargarCategorias} defaultOpen />
+        <TiposInformeCard toast={toast} categorias={categorias} defaultOpen />
+      </GrupoConfiguracion>
 
-      <DispositivosDVRCard toast={toast} />
-      <CaducidadPilaCard toast={toast} />
+      <GrupoConfiguracion
+        titulo="Horario laboral"
+        descripcion="Días y horas en que corre el conteo del SLA de revisión de DVR."
+      >
+        <HorarioLaboralCard toast={toast} defaultOpen={false} />
+      </GrupoConfiguracion>
 
-      <div className="grid-2" style={{ alignItems: "start" }}>
-        <MotivosCard
-          id="tour-motivos-positivos"
-          toast={toast}
-          icono={<CheckCircle2 size={15} color="var(--accent-success)" />}
-          titulo="Motivos de positiva"
-          subtitulo="Razones especiales dentro de un resultado Positiva"
-          descripcion='Razones dentro de un resultado Positiva más allá del caso estándar (se encuentran registros) — ej. "DVR inició proceso de regrabación". El analista los elige al marcar la revisión como Positiva.'
-          placeholderNombre="Ej. DVR inició proceso de regrabación"
-          endpointBase="motivos-positiva"
-        />
-        <MotivosCard
-          id="tour-motivos-negativos"
-          toast={toast}
-          icono={<XCircle size={15} color="var(--accent-danger)" />}
-          titulo="Motivos de negativa"
-          subtitulo="Por qué una revisión resulta Negativa"
-          descripcion="Razones por las que una revisión de DVR resulta Negativa — ej. DVR no enciende, sin grabación del día. El analista los elige al marcar la revisión como Negativa."
-          placeholderNombre="Ej. Cámara desconectada"
-          endpointBase="motivos-negativa"
-        />
-      </div>
+      <GrupoConfiguracion
+        titulo="Dispositivos DVR"
+        descripcion="Catálogo de DVR por vehículo y cada cuánto debe cambiarse su pila."
+      >
+        <DispositivosDVRCard toast={toast} defaultOpen={false} />
+        <CaducidadPilaCard toast={toast} defaultOpen={false} />
+      </GrupoConfiguracion>
+
+      <GrupoConfiguracion
+        titulo="Flujo del proceso"
+        descripcion="Nombre, descripción, orden y activación de cada paso del asistente (analista y cliente)."
+      >
+        <EtapasFlujoCard toast={toast} defaultOpen={false} />
+      </GrupoConfiguracion>
+
+      <GrupoConfiguracion
+        titulo="Motivos de revisión"
+        descripcion="Catálogos que el analista elige al tomar la decisión de una revisión."
+      >
+        <div className="grid-2" style={{ alignItems: "start" }}>
+          <MotivosCard
+            id="tour-motivos-positivos"
+            toast={toast}
+            defaultOpen={false}
+            icono={<CheckCircle2 size={15} color="var(--accent-success)" />}
+            titulo="Motivos de positiva"
+            subtitulo="Razones especiales dentro de un resultado Positiva"
+            descripcion='Razones dentro de un resultado Positiva más allá del caso estándar (se encuentran registros) — ej. "DVR inició proceso de regrabación". El analista los elige al marcar la revisión como Positiva.'
+            placeholderNombre="Ej. DVR inició proceso de regrabación"
+            endpointBase="motivos-positiva"
+          />
+          <MotivosCard
+            id="tour-motivos-negativos"
+            toast={toast}
+            defaultOpen={false}
+            icono={<XCircle size={15} color="var(--accent-danger)" />}
+            titulo="Motivos de negativa"
+            subtitulo="Por qué una revisión resulta Negativa"
+            descripcion="Razones por las que una revisión de DVR resulta Negativa — ej. DVR no enciende, sin grabación del día. El analista los elige al marcar la revisión como Negativa."
+            placeholderNombre="Ej. Cámara desconectada"
+            endpointBase="motivos-negativa"
+          />
+        </div>
+      </GrupoConfiguracion>
 
       {toastState && <Toast message={toastState.msg} type={toastState.type} onClose={() => setToastState(null)} />}
     </div>

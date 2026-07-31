@@ -5,7 +5,7 @@ import {
   Scale, TrendingUp, TrendingDown, Download,
 } from "lucide-react";
 import { API_BASE } from "../../config/api";
-import { formatDuracionHoras, formatFechaHora } from "../../utils/helpers";
+import { formatDuracionHoras, formatFechaHora, hexToArgb, formatFechaCortaISO } from "../../utils/helpers";
 import DrawerPanel from "../../components/ui/DrawerPanel";
 
 function inicialesDe(nombre) {
@@ -285,25 +285,31 @@ function AnalistaCard({ analista, top, tiempoEquipo }) {
 }
 
 // Excel de respaldo/reporte de estas mismas métricas -- mismo estilo de
-// exportación (ExcelJS, encabezado azul, fila de metadata) que ya usa
-// Trazabilidad en NovedadDetallePage.jsx.
-async function exportarMetricasXLSX(analistas, datos) {
-  const columnas = [
-    { key: "analista", label: "Analista", width: 26 },
-    { key: "rol", label: "Rol", width: 16 },
-    { key: "total", label: "Asignadas", width: 12 },
-    { key: "respondidas", label: "Respondidas", width: 13 },
-    { key: "pendientes", label: "Pendientes", width: 12 },
-    { key: "pct_respondidas", label: "% Respondidas", width: 14 },
-    { key: "positivas", label: "Positivas", width: 11 },
-    { key: "negativas", label: "Negativas", width: 11 },
-    { key: "pct_positivas", label: "% Positivas", width: 12 },
-    { key: "tiempo_promedio", label: "Tiempo promedio (h hábiles)", width: 22 },
-    { key: "tiempo_minimo", label: "Tiempo mínimo (h hábiles)", width: 20 },
-    { key: "tiempo_maximo", label: "Tiempo máximo (h hábiles)", width: 20 },
-    { key: "informes", label: "Informes generados", width: 16 },
-    { key: "pct_informes", label: "% Informes/Respondidas", width: 18 },
-  ];
+// exportación (ExcelJS, encabezado de color, fila de metadata) que ya usan
+// Trazabilidad en NovedadDetallePage.jsx y Novedades en
+// components/DynamicTable/DynamicTable.jsx -- columnas visibles, título y
+// color de encabezado configurables desde MetricasExportModal.
+const COLUMNAS_METRICAS_EXPORT = [
+  { key: "analista", label: "Analista", width: 26 },
+  { key: "rol", label: "Rol", width: 16 },
+  { key: "total", label: "Asignadas", width: 12 },
+  { key: "respondidas", label: "Respondidas", width: 13 },
+  { key: "pendientes", label: "Pendientes", width: 12 },
+  { key: "pct_respondidas", label: "% Respondidas", width: 14 },
+  { key: "positivas", label: "Positivas", width: 11 },
+  { key: "negativas", label: "Negativas", width: 11 },
+  { key: "pct_positivas", label: "% Positivas", width: 12 },
+  { key: "tiempo_promedio", label: "Tiempo promedio (h hábiles)", width: 22 },
+  { key: "tiempo_minimo", label: "Tiempo mínimo (h hábiles)", width: 20 },
+  { key: "tiempo_maximo", label: "Tiempo máximo (h hábiles)", width: 20 },
+  { key: "informes", label: "Informes generados", width: 16 },
+  { key: "pct_informes", label: "% Informes/Respondidas", width: 18 },
+];
+
+async function exportarMetricasXLSX(analistas, datos, { columnasVisibles, titulo = "Métricas de analistas", colorHex = "#4F8CFF" } = {}) {
+  const columnas = columnasVisibles
+    ? COLUMNAS_METRICAS_EXPORT.filter((c) => columnasVisibles[c.key])
+    : COLUMNAS_METRICAS_EXPORT;
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Colfenix GPS";
@@ -314,13 +320,21 @@ async function exportarMetricasXLSX(analistas, datos) {
 
   hoja.mergeCells(1, 1, 1, columnas.length);
   const celdaTitulo = hoja.getCell(1, 1);
-  celdaTitulo.value = "Métricas de analistas";
+  celdaTitulo.value = titulo || "Métricas de analistas";
   celdaTitulo.font = { bold: true, size: 14, color: { argb: "FF0F172A" } };
 
   hoja.mergeCells(2, 1, 2, columnas.length);
   const celdaMeta = hoja.getCell(2, 1);
-  celdaMeta.value =
-    `Novedades: ${datos.total_general}   ·   Asignadas: ${datos.total_asignadas}   ·   Informes: ${datos.total_informes}   ·   Tiempo de equipo: ${formatDuracionHoras(datos.tiempo_respuesta_equipo_horas)}`;
+  const piezasMeta = [
+    (datos.rango?.desde || datos.rango?.hasta)
+      ? `Rango: ${datos.rango.desde ? formatFechaCortaISO(datos.rango.desde) : "inicio"} – ${datos.rango.hasta ? formatFechaCortaISO(datos.rango.hasta) : "hoy"}`
+      : null,
+    `Novedades: ${datos.total_general}`,
+    `Asignadas: ${datos.total_asignadas}`,
+    `Informes: ${datos.total_informes}`,
+    `Tiempo de equipo: ${formatDuracionHoras(datos.tiempo_respuesta_equipo_horas)}`,
+  ].filter(Boolean);
+  celdaMeta.value = piezasMeta.join("   ·   ");
   celdaMeta.font = { size: 10.5, color: { argb: "FF475569" } };
 
   hoja.mergeCells(3, 1, 3, columnas.length);
@@ -328,12 +342,13 @@ async function exportarMetricasXLSX(analistas, datos) {
   celdaExportado.value = `Exportado: ${new Date().toLocaleString("es-CO")}`;
   celdaExportado.font = { size: 9.5, italic: true, color: { argb: "FF94A3B8" } };
 
+  const colorArgb = hexToArgb(colorHex);
   const filaEncabezado = hoja.getRow(5);
   columnas.forEach((c, i) => {
     const celda = filaEncabezado.getCell(i + 1);
     celda.value = c.label;
     celda.font = { bold: true, color: { argb: "FFFFFFFF" } };
-    celda.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F8CFF" } };
+    celda.fill = { type: "pattern", pattern: "solid", fgColor: { argb: colorArgb } };
     celda.alignment = { vertical: "middle", horizontal: "left" };
     celda.border = { bottom: { style: "thin", color: { argb: "FF2563EB" } } };
   });
@@ -378,11 +393,163 @@ async function exportarMetricasXLSX(analistas, datos) {
   URL.revokeObjectURL(url);
 }
 
+async function fetchMetricas(desde, hasta) {
+  const params = new URLSearchParams();
+  if (desde) params.set("desde", desde);
+  if (hasta) params.set("hasta", hasta);
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/api/admin/metricas-analistas/${qs ? `?${qs}` : ""}`, { credentials: "include" });
+  if (!res.ok) throw new Error(`El servidor respondió ${res.status}`);
+  return res.json();
+}
+
+// Modal de "Configurar exportación" -- mismo patrón que Novedades
+// (components/DynamicTable/DynamicTable.jsx) y Trazabilidad
+// (NovedadDetallePage.jsx): rango de fechas, checklist de columnas,
+// título/color de encabezado. Sin selector de cliente acá a propósito: un
+// analista trabaja novedades de varios clientes a la vez, así que "cliente"
+// no es una dimensión de este reporte. El rango de fechas sí es real -- al
+// exportar se vuelve a pedir /api/admin/metricas-analistas/ con
+// ?desde=&hasta=, que el backend ahora sabe filtrar (ver
+// apps.novedades.views.metricas_analistas); la vista en pantalla no cambia.
+function MetricasExportModal({ onClose }) {
+  const [fechaDesde, setFechaDesde] = useState("");
+  const [fechaHasta, setFechaHasta] = useState("");
+  const [columnasVisibles, setColumnasVisibles] = useState(() =>
+    Object.fromEntries(COLUMNAS_METRICAS_EXPORT.map((c) => [c.key, true]))
+  );
+  const [titulo, setTitulo] = useState("Métricas de analistas");
+  const [colorHex, setColorHex] = useState("#4F8CFF");
+  const [exportando, setExportando] = useState(false);
+  const [error, setError] = useState(null);
+
+  const toggleColumna = (key) => setColumnasVisibles((prev) => ({ ...prev, [key]: !prev[key] }));
+  const columnasElegidas = COLUMNAS_METRICAS_EXPORT.filter((c) => columnasVisibles[c.key]);
+
+  const handleExportar = async () => {
+    setExportando(true);
+    setError(null);
+    try {
+      const data = await fetchMetricas(fechaDesde, fechaHasta);
+      if (!(data.analistas || []).length) {
+        setError("No hay analistas con novedades en ese rango.");
+        return;
+      }
+      await exportarMetricasXLSX(data.analistas, data, {
+        columnasVisibles, titulo: titulo.trim() || "Métricas de analistas", colorHex,
+      });
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setExportando(false);
+    }
+  };
+
+  return (
+    <DrawerPanel
+      icon={<Download size={18} />}
+      title="Configurar exportación"
+      subtitle={fechaDesde || fechaHasta ? "Se recalculan las métricas para el rango elegido" : "Todo el histórico"}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn btn-secondary" onClick={onClose}>Cancelar</button>
+          <button
+            className="btn btn-primary"
+            onClick={handleExportar}
+            disabled={exportando || columnasElegidas.length === 0}
+          >
+            {exportando ? "Generando..." : "Exportar"}
+          </button>
+        </>
+      }
+    >
+      {error && (
+        <div className="form-group">
+          <p style={{ fontSize: 12.5, color: "var(--accent-danger)" }}>{error}</p>
+        </div>
+      )}
+
+      <div className="form-group">
+        <label className="form-label">Rango de fechas (fecha de la novedad)</label>
+        <div style={{ display: "flex", gap: 10 }}>
+          <input type="date" className="form-input" value={fechaDesde} onChange={(e) => setFechaDesde(e.target.value)} />
+          <input type="date" className="form-input" value={fechaHasta} onChange={(e) => setFechaHasta(e.target.value)} />
+        </div>
+        <p style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 6 }}>
+          {fechaDesde || fechaHasta
+            ? `Del ${fechaDesde ? formatFechaCortaISO(fechaDesde) : "inicio"} al ${fechaHasta ? formatFechaCortaISO(fechaHasta) : "hoy"} — recalcula totales, respuestas y tiempos solo con novedades de ese rango.`
+            : "Déjalo vacío para exportar todo el histórico, igual que se ve en pantalla."}
+        </p>
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">Configuración del encabezado</label>
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+          <div style={{ flex: 1 }}>
+            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Título</span>
+            <input type="text" className="form-input" value={titulo} onChange={(e) => setTitulo(e.target.value)} />
+          </div>
+          <div>
+            <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Color</span>
+            <input
+              type="color"
+              value={colorHex}
+              onChange={(e) => setColorHex(e.target.value)}
+              style={{
+                display: "block", width: 44, height: 34, padding: 2,
+                border: "1px solid var(--border)", borderRadius: "var(--radius-sm)",
+                background: "var(--bg-surface)", cursor: "pointer",
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="form-group">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <label className="form-label" style={{ marginBottom: 0 }}>
+            Columnas a exportar ({columnasElegidas.length})
+          </label>
+          <button
+            onClick={() => setColumnasVisibles(Object.fromEntries(COLUMNAS_METRICAS_EXPORT.map((c) => [c.key, true])))}
+            style={{ fontSize: 12, color: "var(--accent-primary)", background: "none", border: "none", cursor: "pointer", padding: 0 }}
+          >
+            Todas
+          </button>
+        </div>
+        <div style={{
+          maxHeight: 260, overflowY: "auto", marginTop: 8,
+          border: "1px solid var(--border)", borderRadius: "var(--radius-sm)",
+        }}>
+          {COLUMNAS_METRICAS_EXPORT.map((col) => (
+            <label key={col.key} style={{
+              display: "flex", alignItems: "center", gap: 10,
+              padding: "7px 12px", cursor: "pointer",
+              background: columnasVisibles[col.key] ? "var(--accent-glow)" : "transparent",
+              borderBottom: "1px solid var(--border)",
+            }}>
+              <input
+                type="checkbox"
+                checked={!!columnasVisibles[col.key]}
+                onChange={() => toggleColumna(col.key)}
+                style={{ accentColor: "var(--accent-primary)", width: 14, height: 14 }}
+              />
+              <span style={{ fontSize: 13, color: "var(--text-primary)" }}>{col.label}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    </DrawerPanel>
+  );
+}
+
 export default function MetricasAnalistasPage() {
   const [datos, setDatos] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
-  const [exportando, setExportando] = useState(false);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
 
   useEffect(() => {
     let cancelado = false;
@@ -413,15 +580,6 @@ export default function MetricasAnalistasPage() {
   const pctPositivas = (totalPositivas + totalNegativas) ? Math.round((totalPositivas / (totalPositivas + totalNegativas)) * 100) : null;
   const pctInformes = totalRespondidas ? Math.round((datos?.total_informes / totalRespondidas) * 100) : 0;
 
-  const exportar = async () => {
-    setExportando(true);
-    try {
-      await exportarMetricasXLSX(analistas, datos);
-    } finally {
-      setExportando(false);
-    }
-  };
-
   return (
     <div className="page-shell">
       <div className="hero-panel compact">
@@ -435,12 +593,14 @@ export default function MetricasAnalistasPage() {
         </div>
         {!loading && !loadError && datos && (
           <div className="hero-actions">
-            <button className="btn btn-secondary" onClick={exportar} disabled={exportando}>
-              <Download size={14} /> {exportando ? "Generando..." : "Exportar Excel"}
+            <button className="btn btn-secondary" onClick={() => setExportModalOpen(true)}>
+              <Download size={14} /> Exportar Excel
             </button>
           </div>
         )}
       </div>
+
+      {exportModalOpen && <MetricasExportModal onClose={() => setExportModalOpen(false)} />}
 
       {loading && <div className="card" style={{ color: "var(--text-muted)" }}>Cargando métricas…</div>}
       {loadError && (

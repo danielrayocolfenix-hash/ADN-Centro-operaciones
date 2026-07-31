@@ -6,14 +6,17 @@ from django.middleware.csrf import get_token
 from django.utils import timezone
 from django.db.models import Count
 from django.db.models import Count, Q
-from apps.novedades.models import Novedades, MotivoNegativo, MotivoPositivo, NovedadEvento, NovedadEvidencia, HorarioLaboral
+from apps.novedades.models import Novedades, MotivoNegativo, MotivoPositivo, NovedadEvento, NovedadEvidencia, HorarioLaboral, EtapaFlujo
 from apps.novedades.horario_laboral import calcular_sla_novedad, calcular_espera_dd, horas_habiles_entre
+from apps.novedades.etapas import CRITERIOS_ETAPA
+from apps.novedades.notificaciones import notificar_caso_en_revision
+from apps.novedades.views_portal import _serializar_novedad_portal
 from apps.Vehiculo.models import Ruta, DispositivoDVR, ConfiguracionDVR
 from apps.Vehiculo.pila import calcular_estado_pila
 from apps.Informes.models import CategoriaTipoInforme, Informe
 from apps.novedades.forms_schema import NOVEDADES_FORM
 from apps.usuarios_colfenix.models import UsuariosColfenix
-from apps.configuracion.permisos import tiene_permiso
+from apps.configuracion.permisos import tiene_permiso, es_cliente_de
 
 
 def _no_autenticado():
@@ -74,6 +77,10 @@ def _completar_timestamps_hasta(novedad, estado_alcanzado, ahora, valores_explic
 def _serializar_novedad(novedad, detalle=False, horario=None):
     sla = calcular_sla_novedad(novedad, horario=horario)
     espera = calcular_espera_dd(novedad)
+    # Se calcula una sola vez y se reutiliza abajo (tiene_informe/informe_id
+    # en el listado, data['informe'] en el detalle) -- antes el detalle
+    # volvía a pedirlo con la misma consulta.
+    ultimo_informe = novedad.informes.order_by('-fecha_creacion').first()
     data = {
         'id': novedad.id,
         'codigo_novedad': novedad.codigo_novedad,
@@ -130,6 +137,11 @@ def _serializar_novedad(novedad, detalle=False, horario=None):
         'fecha_ingreso_dvr': novedad.fecha_ingreso_dvr,
         'fecha_salida_dvr': novedad.fecha_salida_dvr,
 
+        'respuesta_cliente': novedad.respuesta_cliente,
+        'comentario_cliente': novedad.comentario_cliente,
+        'fecha_respuesta_cliente': novedad.fecha_respuesta_cliente,
+        'respondido_por_cliente': str(novedad.respondido_por_cliente) if novedad.respondido_por_cliente_id else None,
+
         'motivo_negativo_id': novedad.motivo_negativo_id,
         'motivo_negativo': novedad.motivo_negativo.nombre if novedad.motivo_negativo_id else None,
         'detalle_motivo_negativo': novedad.detalle_motivo_negativo,
@@ -141,7 +153,11 @@ def _serializar_novedad(novedad, detalle=False, horario=None):
         'estado_novedad': novedad.estado_novedad,
         'estado_novedad_display': novedad.get_estado_novedad_display(),
 
-        'tiene_informe': novedad.informes.exists(),
+        # informe_id: para que el listado de Novedades pueda abrir
+        # directamente el informe ya generado en vez de mandar a crear uno
+        # nuevo cuando ya existe (ver NovedadesPage.jsx).
+        'tiene_informe': ultimo_informe is not None,
+        'informe_id': ultimo_informe.id if ultimo_informe else None,
 
         'observaciones': novedad.observaciones,
 
@@ -180,7 +196,6 @@ def _serializar_novedad(novedad, detalle=False, horario=None):
             }
             for d in novedad.vehiculo.dispositivos_dvr.all()
         ]
-        ultimo_informe = novedad.informes.order_by('-fecha_creacion').first()
         data['informe'] = {
             'id': ultimo_informe.id,
             'codigo': ultimo_informe.codigo,
@@ -256,6 +271,21 @@ def count_informes_pendientes(request):
     )['total']
 
     return JsonResponse({"informes_pendientes": informes_pendientes})
+
+def count_alertas_criticas(request):
+    """
+    GET /api/novedades/alertas-criticas/count/ -- misma fórmula que ya usan
+    NovedadesPage.jsx y DashboardPage.jsx en el frontend (Prioridad_Alta sin
+    cerrar), acá para el badge del ícono "Novedades" del sidebar -- antes
+    ese número salía de datos mock, sin relación con la base real.
+    """
+    if not request.user.is_authenticated:
+        return _no_autenticado()
+    alertas = Novedades.objects.filter(
+        nivel_prioridad='Prioridad_Alta',
+    ).exclude(estado_novedad='Completado').aggregate(total=Count('id'))['total']
+
+    return JsonResponse({"alertas_criticas": alertas})
 
 @ensure_csrf_cookie
 def get_csrf_token(request):
@@ -447,6 +477,8 @@ class NovedadDetalleView(View):
                     valor_nuevo=valor_nuevo,
                     usuario=usuario,
                 )
+                if campo == "estado_dd" and valor_nuevo == "EN_REVISION":
+                    notificar_caso_en_revision(novedad)
 
             return JsonResponse({
                 "success": True,
@@ -511,6 +543,13 @@ def metricas_analistas(request):
     ENCOLADO hasta TERMINADO — mismo cálculo que el SLA, promediado sobre
     sus novedades ya cerradas) y los informes que ha generado, con enlace a
     cada uno. Reservado a is_staff=True.
+
+    Acepta ?desde=YYYY-MM-DD y/o ?hasta=YYYY-MM-DD opcionales -- acotan
+    todo por Novedades.fecha_novedad. Sin ninguno de los dos, el
+    comportamiento es exactamente el de siempre (todo el histórico); se
+    agregó para que el modal de "Configurar exportación" de Métricas de
+    analistas pueda generar un Excel de un rango puntual sin tocar lo que
+    ve la pantalla por defecto.
     """
     if not request.user.is_authenticated:
         return _no_autenticado()
@@ -519,11 +558,22 @@ def metricas_analistas(request):
 
     horario = HorarioLaboral.get_actual()
 
+    desde = request.GET.get("desde") or None
+    hasta = request.GET.get("hasta") or None
+
+    # Q() vacío no impone ninguna condición, así que sin desde/hasta el
+    # filtro combinado con `&` deja cada Count exactamente como estaba.
+    filtro_rango = Q()
+    if desde:
+        filtro_rango &= Q(novedades__fecha_novedad__gte=desde)
+    if hasta:
+        filtro_rango &= Q(novedades__fecha_novedad__lte=hasta)
+
     analistas = UsuariosColfenix.objects.filter(rol__icontains="analista", is_active=True).annotate(
-        total=Count("novedades"),
-        respondidas=Count("novedades", filter=~Q(novedades__estado_novedad="Pendiente_por_responder")),
-        positivas=Count("novedades", filter=Q(novedades__respuesta_novedad="Positiva")),
-        negativas=Count("novedades", filter=Q(novedades__respuesta_novedad="Negativa")),
+        total=Count("novedades", filter=filtro_rango),
+        respondidas=Count("novedades", filter=filtro_rango & ~Q(novedades__estado_novedad="Pendiente_por_responder")),
+        positivas=Count("novedades", filter=filtro_rango & Q(novedades__respuesta_novedad="Positiva")),
+        negativas=Count("novedades", filter=filtro_rango & Q(novedades__respuesta_novedad="Negativa")),
     )
 
     data = []
@@ -533,6 +583,10 @@ def metricas_analistas(request):
         cerradas = Novedades.objects.filter(
             analista=a, fecha_recepcion_dd__isnull=False, fecha_fin_revision__isnull=False,
         )
+        if desde:
+            cerradas = cerradas.filter(fecha_novedad__gte=desde)
+        if hasta:
+            cerradas = cerradas.filter(fecha_novedad__lte=hasta)
         tiempos = [
             horas_habiles_entre(n.fecha_recepcion_dd, n.fecha_fin_revision, horario)
             for n in cerradas
@@ -542,6 +596,10 @@ def metricas_analistas(request):
         informes_qs = Informe.objects.filter(novedad__analista=a).select_related(
             "novedad", "tipo_informe"
         )
+        if desde:
+            informes_qs = informes_qs.filter(novedad__fecha_novedad__gte=desde)
+        if hasta:
+            informes_qs = informes_qs.filter(novedad__fecha_novedad__lte=hasta)
         informes = [
             {
                 "id": inf.id,
@@ -573,14 +631,21 @@ def metricas_analistas(request):
     # El "cuadro de tareas" prioriza visualmente a quien más informes ha producido.
     data.sort(key=lambda d: d["informes_generados"], reverse=True)
 
+    novedades_rango = Novedades.objects.all()
+    if desde:
+        novedades_rango = novedades_rango.filter(fecha_novedad__gte=desde)
+    if hasta:
+        novedades_rango = novedades_rango.filter(fecha_novedad__lte=hasta)
+
     return JsonResponse({
         "analistas": data,
-        "total_general": Novedades.objects.count(),
+        "total_general": novedades_rango.count(),
         "total_asignadas": sum(d["total"] for d in data),
         "total_informes": sum(d["informes_generados"] for d in data),
         "tiempo_respuesta_equipo_horas": (
             round(sum(todos_los_tiempos) / len(todos_los_tiempos), 2) if todos_los_tiempos else None
         ),
+        "rango": {"desde": desde, "hasta": hasta},
     })
 
 
@@ -916,3 +981,238 @@ class AdminHorarioLaboral(View):
             return JsonResponse({"success": True, "mensaje": "Horario laboral actualizado correctamente."})
         except Exception as e:
             return JsonResponse({"success": False, "mensaje": str(e)}, status=400)
+
+
+def _serializar_etapa(e):
+    return {
+        "id": e.id,
+        "clave": e.clave,
+        "track": e.track,
+        "track_display": e.get_track_display(),
+        "nombre": e.nombre,
+        "descripcion": e.descripcion,
+        "orden": e.orden,
+        "activo": e.activo,
+    }
+
+
+def listar_etapas_flujo(request):
+    """
+    GET /api/etapas-flujo/ -- catálogo de etapas activas, para que el
+    asistente de NovedadDetallePage arme sus pasos con el nombre/descripción/
+    orden ya configurados. A diferencia de AdminEtapasFlujo (reservado a
+    administracion.gestionar_novedades, para editar), esto solo requiere
+    sesión iniciada -- igual que listar_motivos_negativa/listar_motivos_positiva,
+    cualquiera que pueda ver una novedad necesita poder leer esto.
+    """
+    if not request.user.is_authenticated:
+        return _no_autenticado()
+    etapas = EtapaFlujo.objects.filter(activo=True)
+    return JsonResponse([_serializar_etapa(e) for e in etapas], safe=False)
+
+
+class AdminEtapasFlujo(View):
+    """
+    GET /api/admin/etapas-flujo/ -- catálogo completo (ambos tracks), para la
+    tarjeta "Etapas del flujo" de Administración › Configuración de novedades.
+    Sin POST de creación a propósito: las etapas no se crean desde acá (ver
+    EtapaFlujo.clean(), la clave debe ya tener criterio en
+    apps.novedades.etapas.CRITERIOS_ETAPA), solo se editan/reordenan/activan
+    las que ya sembró la migración de datos.
+    """
+
+    def get(self, request):
+        if not request.user.is_authenticated:
+            return _no_autenticado()
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
+            return _sin_permiso()
+        etapas = EtapaFlujo.objects.all()
+        return JsonResponse([_serializar_etapa(e) for e in etapas], safe=False)
+
+
+class AdminEtapaFlujoDetalle(View):
+    """POST /api/admin/etapas-flujo/<id>/ -- edita nombre/descripcion/orden/activo."""
+
+    def post(self, request, etapa_id):
+        if not request.user.is_authenticated:
+            return _no_autenticado()
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
+            return _sin_permiso()
+        try:
+            etapa = EtapaFlujo.objects.get(id=etapa_id)
+        except EtapaFlujo.DoesNotExist:
+            return JsonResponse({"success": False, "mensaje": "La etapa no existe."}, status=404)
+        try:
+            data = json.loads(request.body)
+            for campo in ("nombre", "descripcion"):
+                if campo in data:
+                    setattr(etapa, campo, data[campo])
+            if "orden" in data:
+                etapa.orden = int(data["orden"])
+            if "activo" in data:
+                etapa.activo = bool(data["activo"])
+            etapa.save()
+            return JsonResponse({"success": True, "etapa": _serializar_etapa(etapa)})
+        except Exception as e:
+            return JsonResponse({"success": False, "mensaje": str(e)}, status=400)
+
+
+class ClienteResponderNovedad(View):
+    """
+    POST /api/portal/novedades/<id>/responder/ -- el cliente registra su
+    respuesta (Conforme/No conforme + comentario) sobre el informe ya
+    generado. Endpoint propio, separado de NovedadDetalleView (que es
+    staff-only vía el permiso novedades.editar): acá la autorización es "es
+    un usuario tipo=CLIENTE dueño de esta novedad" (es_cliente_de), no un
+    permiso de la tabla Permiso. Respuesta de una sola vía -- no hay edición
+    posterior, igual de inmutable que el resto de NovedadEvento.
+    """
+
+    def post(self, request, novedad_id):
+        if not request.user.is_authenticated:
+            return _no_autenticado()
+        try:
+            novedad = Novedades.objects.get(id=novedad_id)
+        except Novedades.DoesNotExist:
+            return JsonResponse({"success": False, "mensaje": "La novedad no existe."}, status=404)
+
+        if not es_cliente_de(request.user, novedad):
+            return _sin_permiso()
+
+        if not CRITERIOS_ETAPA["informe"](novedad):
+            return JsonResponse({
+                "success": False,
+                "mensaje": "Todavía no hay un informe generado para responder.",
+            }, status=400)
+
+        if novedad.respuesta_cliente:
+            return JsonResponse({
+                "success": False,
+                "mensaje": "Esta novedad ya tiene una respuesta registrada.",
+            }, status=400)
+
+        try:
+            data = json.loads(request.body)
+        except json.JSONDecodeError:
+            return JsonResponse({"success": False, "mensaje": "Cuerpo de la solicitud inválido."}, status=400)
+
+        respuesta = data.get("respuesta_cliente")
+        if respuesta not in dict(Novedades.RESPUESTA_CLIENTE_CHOICES):
+            return JsonResponse({"success": False, "mensaje": "Respuesta inválida."}, status=400)
+
+        try:
+            valor_anterior = novedad.respuesta_cliente
+            novedad.respuesta_cliente = respuesta
+            novedad.comentario_cliente = data.get("comentario_cliente", "")
+            novedad.fecha_respuesta_cliente = timezone.now()
+            novedad.respondido_por_cliente = request.user
+            novedad.save()
+
+            NovedadEvento.objects.create(
+                novedad=novedad,
+                campo="respuesta_cliente",
+                valor_anterior=valor_anterior,
+                valor_nuevo=respuesta,
+                usuario=request.user,
+            )
+            return JsonResponse({"success": True, "mensaje": "Respuesta registrada correctamente."})
+        except Exception as e:
+            return JsonResponse({"success": False, "mensaje": str(e)}, status=400)
+
+
+def _serializar_novedad_vista_cliente(n):
+    """
+    Igual al recorte de _serializar_novedad_portal, más el cliente dueño --
+    el cliente mismo ya sabe cuál es (nunca se lo mandamos), pero acá el
+    staff está viendo varios clientes a la vez y necesita distinguirlos.
+    """
+    data = _serializar_novedad_portal(n)
+    data["cliente_id"] = n.cliente_id
+    data["cliente"] = n.cliente.nombre
+    return data
+
+
+def staff_vista_cliente_listar_novedades(request):
+    """
+    GET /api/admin/vista-cliente/novedades/?cliente_id=<id> -- el mismo
+    recorte de datos que ve un cliente en su portal, pero para que el staff
+    (administracion.gestionar_novedades) lo revise con fines de soporte/demo.
+    Sin `cliente_id` devuelve TODAS las novedades de TODOS los clientes --
+    a propósito: un superadmin debe poder ver el conjunto completo, no solo
+    cliente por cliente.
+    """
+    if not request.user.is_authenticated:
+        return _no_autenticado()
+    if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
+        return _sin_permiso()
+    qs = Novedades.objects.select_related(
+        'cliente', 'vehiculo', 'ruta', 'tipo_informe', 'tipo_informe__categoria_informe',
+    ).prefetch_related('informes')
+    cliente_id = request.GET.get("cliente_id")
+    if cliente_id:
+        qs = qs.filter(cliente_id=cliente_id)
+    return JsonResponse([_serializar_novedad_vista_cliente(n) for n in qs], safe=False)
+
+
+class StaffVistaClienteNovedadDetalle(View):
+    """GET /api/admin/vista-cliente/novedades/<id>/ -- detalle de solo lectura, sin restricción de cliente."""
+
+    def get(self, request, novedad_id):
+        if not request.user.is_authenticated:
+            return _no_autenticado()
+        if not tiene_permiso(request.user, "administracion.gestionar_novedades"):
+            return _sin_permiso()
+        try:
+            novedad = Novedades.objects.select_related(
+                'cliente', 'vehiculo', 'ruta', 'tipo_informe', 'tipo_informe__categoria_informe',
+            ).get(id=novedad_id)
+        except Novedades.DoesNotExist:
+            return JsonResponse({"success": False, "mensaje": "La novedad no existe."}, status=404)
+        return JsonResponse(_serializar_novedad_vista_cliente(novedad))
+
+
+def sugerir_motivo(request, novedad_id):
+    """
+    GET /api/novedades/<id>/sugerir-motivo/?respuesta_novedad=Positiva|Negativa
+    -- motivo más frecuente entre novedades históricas del MISMO vehículo y
+    MISMO tipo de informe con esa respuesta -- asistente determinista (solo
+    Count(), sin IA) para el paso "Decisión tomada" del flujo de revisión.
+    No sugiere con un solo caso histórico (ruido, no patrón todavía).
+    """
+    if not request.user.is_authenticated:
+        return _no_autenticado()
+    try:
+        novedad = Novedades.objects.get(id=novedad_id)
+    except Novedades.DoesNotExist:
+        return JsonResponse({"success": False, "mensaje": "La novedad no existe."}, status=404)
+
+    respuesta = request.GET.get("respuesta_novedad")
+    if respuesta not in ("Positiva", "Negativa"):
+        return JsonResponse({"success": False, "mensaje": "respuesta_novedad debe ser Positiva o Negativa."}, status=400)
+
+    campo_motivo = "motivo_negativo" if respuesta == "Negativa" else "motivo_positivo"
+    qs = Novedades.objects.filter(
+        vehiculo_id=novedad.vehiculo_id,
+        tipo_informe_id=novedad.tipo_informe_id,
+        respuesta_novedad=respuesta,
+        **{f"{campo_motivo}__isnull": False},
+    ).exclude(id=novedad_id)
+
+    casos_considerados = qs.count()
+    top = (
+        qs.values(f"{campo_motivo}_id", f"{campo_motivo}__nombre")
+        .annotate(total=Count("id"))
+        .order_by("-total")
+        .first()
+    )
+    if not top or top["total"] < 2:
+        return JsonResponse({"sugerencia": None})
+
+    return JsonResponse({
+        "sugerencia": {
+            "motivo_id": top[f"{campo_motivo}_id"],
+            "nombre": top[f"{campo_motivo}__nombre"],
+            "total": top["total"],
+            "casos_considerados": casos_considerados,
+        }
+    })

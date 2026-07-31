@@ -7,6 +7,7 @@ from .models import (
     NovedadEvento,
     HorarioLaboral,
     NovedadEvidencia,
+    NovedadNotificacion,
 )
 
 
@@ -56,4 +57,12 @@ class NovedadEventoAdmin(admin.ModelAdmin):
 @admin.register(NovedadEvidencia)
 class NovedadEvidenciaAdmin(admin.ModelAdmin):
     list_display = ('novedad', 'descripcion', 'creado')
+    readonly_fields = ('creado',)
+
+
+@admin.register(NovedadNotificacion)
+class NovedadNotificacionAdmin(admin.ModelAdmin):
+    list_display = ('novedad', 'cliente', 'severidad', 'mensaje', 'leido', 'creado')
+    list_filter = ('severidad', 'leido', 'cliente')
+    search_fields = ('novedad__codigo_novedad', 'mensaje')
     readonly_fields = ('creado',)

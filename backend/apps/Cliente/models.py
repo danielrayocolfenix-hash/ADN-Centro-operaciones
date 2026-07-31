@@ -25,6 +25,14 @@ class Cliente(models.Model):
         db_index=True
     )
 
+    # Datos de contacto -- antes solo vivían en el mock del frontend
+    # (ClientesPage.jsx); acá quedan opcionales (blank=True) porque los
+    # clientes que ya existen en producción no los tienen cargados.
+    contacto = models.CharField(max_length=150, blank=True, default="")
+    telefono = models.CharField(max_length=30, blank=True, default="")
+    email = models.EmailField(blank=True, default="")
+    ciudad = models.CharField(max_length=100, blank=True, default="")
+
     estado = models.CharField(
         max_length=20,
         choices=ESTADO_CHOICES,
